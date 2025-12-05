@@ -29,6 +29,7 @@ dependencies = [
   "anndata>=0.9",
   "einops>=0.8",
   "h5py>=3.10",
+  "ipywidgets>=8.1.7",
   "local-attention==1.11.2",
   "numpy>=2",
   "pandas>=2",
@@ -49,6 +50,7 @@ optional-dependencies.doc = [
   "docutils>=0.8,!=0.18.*,!=0.19.*",
   "ipykernel",
   "ipython",
+  "ipywidgets",
   "myst-nb>=1.1",
   "pandas",
   # Until pybtex >0.24.0 releases: https://bitbucket.org/pybtex-devs/pybtex/issues/169/
