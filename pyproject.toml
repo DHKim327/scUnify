@@ -29,6 +29,7 @@ dependencies = [
   "anndata>=0.9",
   "einops>=0.8",
   "h5py>=3.10",
+  "local-attention==1.11.2",
   "numpy>=2",
   "pandas>=2",
   "ray[default,train]>=2.48",
@@ -38,6 +39,7 @@ dependencies = [
   "scipy>=1.11",
   "session-info2>=0.2",
   "torch>=2.2",
+  "torchtext==0.18",
   "zarr>=3",
 ]
 
