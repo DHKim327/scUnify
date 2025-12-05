@@ -24,7 +24,14 @@ There are several alternative options to install scUnify:
 1) Install the latest release of `scUnify` from [PyPI][]:
 
 ```bash
-pip install scUnify
+git cleon <repo>
+cd scUnify
+pip install .
+```
+
+```bash
+pip install torch
+conda install torchtext==0.18.0
 ```
 -->
 
