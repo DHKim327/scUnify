@@ -38,8 +38,6 @@ dependencies = [
   "scikit-learn>=1.4",
   "scipy>=1.11",
   "session-info2>=0.2",
-  "torch>=2.2",
-  "torchtext==0.18",
   "zarr>=3",
 ]
 
