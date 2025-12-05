@@ -1,0 +1,56 @@
+cell:
+  mae_autobin:
+    mask_gene_name: false
+    gene_num: 19266
+    seq_len: 19266
+    encoder:
+      hidden_dim: 768
+      depth: 12
+      heads: 12
+      dim_head: 64
+      seq_len: 19266
+      module_type: transformer
+      norm_first: false
+    decoder:
+      hidden_dim: 512
+      depth: 6
+      heads: 8
+      dim_head: 64
+      module_type: performer
+      seq_len: 19266
+      norm_first: false
+    n_class: 104
+    pad_token_id: 103
+    mask_token_id: 102
+    bin_num: 100
+    bin_alpha: 1.0
+    rawcount: true
+    model: mae_autobin
+rde:
+  mae_autobin:
+    mask_gene_name: false
+    gene_num: 19266
+    seq_len: 19266
+    encoder:
+      hidden_dim: 768
+      depth: 12
+      heads: 12
+      dim_head: 64
+      seq_len: 19266
+      module_type: transformer
+      norm_first: false
+    decoder:
+      hidden_dim: 512
+      depth: 6
+      heads: 8
+      dim_head: 64
+      module_type: performer
+      seq_len: 19266
+      norm_first: false
+    n_class: 104
+    pad_token_id: 103
+    mask_token_id: 102
+    bin_num: 100
+    bin_alpha: 1.0
+    rawcount: true
+    model: mae_autobin

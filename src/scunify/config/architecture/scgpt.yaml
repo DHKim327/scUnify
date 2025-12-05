@@ -1,0 +1,16 @@
+d_model: 512
+nhead: 8
+d_hid: 512
+nlayers: 12
+nlayers_cls: 3
+n_cls: 1
+dropout: 0.2
+pad_token: <pad>
+pad_value: -2
+do_mvc: true
+do_dab: false
+use_batch_labels: false
+domain_spec_batchnorm: false
+explicit_zero_prob: false
+fast_transformer_backend: flash
+pre_norm: false

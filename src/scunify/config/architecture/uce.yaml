@@ -1,0 +1,24 @@
+4:
+  pad_length: 1536
+  pad_token_idx: 0
+  chrom_token_left_idx: 1
+  chrom_token_right_idx: 2
+  CHROM_TOKEN_OFFSET: 143574
+  sample_size: 1024
+  CXG: true
+  output_dim: 1280
+  d_hid: 5120
+  token_dim: 5120
+  cls_token_idx: 3
+33:
+  pad_length: 1536
+  pad_token_idx: 0
+  chrom_token_left_idx: 1
+  chrom_token_right_idx: 2
+  CHROM_TOKEN_OFFSET: 143574
+  sample_size: 1024
+  CXG: true
+  output_dim: 1280
+  d_hid: 5120
+  token_dim: 5120
+  cls_token_idx: 3

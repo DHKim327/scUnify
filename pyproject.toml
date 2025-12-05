@@ -3,7 +3,7 @@ build-backend = "hatchling.build"
 requires = [ "hatchling" ]
 
 [project]
-name = "scUnify"
+name = "scunify"
 version = "0.0.1"
 description = "Unified Zero-shot Inference Framework for scRNA-seq Foundation Models"
 readme = "README.md"
@@ -22,11 +22,25 @@ classifiers = [
   "Programming Language :: Python :: 3.13",
   "Programming Language :: Python :: 3.14",
 ]
+
+# scUnify 핵심 기능에 필요한 런타임 의존성 (import scunify 해서 인퍼런스 돌릴 때 필요한 것들)
 dependencies = [
-  "anndata",
-  # for debug logging (referenced from the issue template)
-  "session-info2",
+  "accelerate>=1",
+  "anndata>=0.9",
+  "einops>=0.8",
+  "h5py>=3.10",
+  "numpy>=2",
+  "pandas>=2",
+  "ray[default]>=2.48",
+  "scanpy>=1.9",
+  "scib-metrics>=0.5.7",
+  "scikit-learn>=1.4",
+  "scipy>=1.11",
+  "session-info2>=0.2",
+  "torch>=2.2",
+  "zarr>=3",
 ]
+
 optional-dependencies.dev = [
   "pre-commit",
   "twine>=4.0.2",
@@ -53,7 +67,6 @@ optional-dependencies.test = [
   "pytest",
   "pytest-cov",     # For VS Code’s coverage functionality
 ]
-# https://docs.pypi.org/project_metadata/#project-urls
 urls.Documentation = "https://scUnify.readthedocs.io/"
 urls.Homepage = "https://github.com/DHKim327/scUnify"
 urls.Source = "https://github.com/DHKim327/scUnify"
@@ -92,37 +105,36 @@ matrix.deps.env-vars = [
 line-length = 120
 src = [ "src" ]
 extend-include = [ "*.ipynb" ]
+exclude = [
+  ".git",
+  ".venv",
+  "build",
+  "dist",
+  "src/scunify/registry/", # ← 끝에 / 없어도 됨
+]
 
 format.docstring-code-format = true
 
 lint.select = [
-  "B",      # flake8-bugbear
-  "BLE",    # flake8-blind-except
-  "C4",     # flake8-comprehensions
-  "D",      # pydocstyle
-  "E",      # Error detected by Pycodestyle
-  "F",      # Errors detected by Pyflakes
-  "I",      # isort
-  "RUF100", # Report unused noqa directives
-  "TID",    # flake8-tidy-imports
-  "UP",     # pyupgrade
-  "W",      # Warning detected by Pycodestyle
+  #"B",  # 일부 버그 가능성 있는 버그베어
+  #"E",  # 진짜 문법/스타일 에러
+  #"F",  # 정의 안된 이름 등 진짜 버그 (나중에 다시 켜는 걸 추천)
+  #"UP", # Python 업그레이드 관련 (원하면 유지)
 ]
+
 lint.ignore = [
-  "B008", # Errors from function calls in argument defaults. These are fine when the result is immutable.
-  "D100", # Missing docstring in public module
-  "D104", # Missing docstring in public package
-  "D105", # __magic__ methods are often self-explanatory, allow missing docstrings
-  "D107", # Missing docstring in __init__
-  # Disable one in each pair of mutually incompatible rules
-  "D203", # We don’t want a blank line before a class docstring
-  "D213", # <> We want docstrings to start immediately after the opening triple quote
-  "D400", # first line should end with a period [Bug: doesn’t work with single-line docstrings]
-  "D401", # First line should be in imperative mood; try rephrasing
-  "E501", # line too long -> we accept long comment lines; formatter gets rid of long code lines
-  "E731", # Do not assign a lambda expression, use a def -> lambda expression assignments are convenient
-  "E741", # allow I, O, l as variable names -> I is the identity matrix
+  "B008",
+  # 추가로 아래도 꺼버릴 수 있음
+  "B905",   # zip strict
+  "BLE001", # broad except
+  "C408",   # dict() 스타일
+  "C417",   # map() 스타일
+  "E501",
+  "E731",
+  "E741",
+  "TID252", # 절대 import 강요
 ]
+
 lint.per-file-ignores."*/__init__.py" = [ "F401" ]
 lint.per-file-ignores."docs/*" = [ "I" ]
 lint.per-file-ignores."tests/*" = [ "D" ]

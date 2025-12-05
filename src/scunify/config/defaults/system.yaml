@@ -1,0 +1,13 @@
+# scunify/configs/defaults/system.yaml
+version: 1
+
+accelerate:
+  mixed_precision: fp16   # no | fp16 | bf16 | fp8
+  cpu: false              # 디버그/CPU 전용 시 true
+  split_batches: false
+
+ray:
+  per_worker:
+    CPU: 1                # 워커당 CPU 기본값
+    GPU: 1                # DDP 표준: 워커=GPU 1장
+  placement_strategy: PACK  # PACK | SPREAD
