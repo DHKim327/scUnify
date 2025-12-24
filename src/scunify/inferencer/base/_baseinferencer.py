@@ -38,6 +38,18 @@ class BaseInferencer(ABC):
         collator = getattr(ds, "collator", None)
         sampler = getattr(ds, "sampler", None)
 
+        # worker_init_fn for reproducibility (inference-specific)
+        def worker_init_fn(worker_id):
+            import random
+            import numpy as np
+            import torch
+            
+            # 모든 worker가 config의 global seed 사용
+            seed = inf.get("seed", 0)
+            np.random.seed(seed)
+            random.seed(seed)
+            torch.manual_seed(seed)
+
         return DataLoader(
             ds,
             batch_size=bs,
@@ -48,6 +60,7 @@ class BaseInferencer(ABC):
             pin_memory=True,
             persistent_workers=(nw > 0),
             drop_last=False,
+            worker_init_fn=worker_init_fn if nw > 0 else None,
         )
 
     # ----- Output handling -----

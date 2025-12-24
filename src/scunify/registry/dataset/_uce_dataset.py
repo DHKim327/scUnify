@@ -8,6 +8,14 @@ from ...utils import load_yaml
 class UCEDataset(Dataset):
     def __init__(self, adata, config):
         self.args = config
+        
+        # Seed for reproducibility
+        seed = config.inference.get("seed", 42)
+        np.random.seed(seed)
+        torch.manual_seed(seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(seed)
+        
         _model_param = load_yaml(config._architecture_dir)[config.inference["nlayers"]]
         self.args.pad_length = _model_param["pad_length"]
         self.args.sample_size = _model_param["sample_size"]
@@ -85,8 +93,17 @@ class Collator:
 
 
 def sample_cell_sentences(
-    counts, batch_weights, dataset, args, dataset_to_protein_embeddings, dataset_to_chroms, dataset_to_starts
+    counts, batch_weights, dataset, args, dataset_to_protein_embeddings, dataset_to_chroms, dataset_to_starts, rng=None
 ):
+    """
+    Sample cell sentences for UCE model.
+    
+    Args:
+        rng: numpy RandomState for reproducibility. If None, uses global np.random.
+    """
+    if rng is None:
+        rng = np.random  # fallback to global state (controlled by worker_init_fn)
+    
     dataset_idxs = dataset_to_protein_embeddings[dataset]  # get the dataset specific protein embedding idxs
     if isinstance(dataset_idxs, torch.Tensor):
         dataset_idxs = dataset_idxs.cpu().numpy()
@@ -105,7 +122,7 @@ def sample_cell_sentences(
         weights = weights / sum(weights)  # RE NORM after mask
 
         # randomly choose the genes that will make up the sample, weighted by expression, with replacement
-        choice_idx = np.random.choice(np.arange(len(weights)), size=args.sample_size, p=weights, replace=True)
+        choice_idx = rng.choice(np.arange(len(weights)), size=args.sample_size, p=weights, replace=True)
         choosen_chrom = chroms[choice_idx]  # get the sampled genes chromosomes
         # order the genes by chromosome
         chrom_sort = np.argsort(choosen_chrom)
@@ -120,7 +137,7 @@ def sample_cell_sentences(
         i = 1  # continue on to the rest of the sequence with left bracket being assumed.
         # Shuffle the chroms now, there's no natural order to chromosomes
         uq_chroms = np.unique(new_chrom)
-        np.random.shuffle(uq_chroms)  # shuffle
+        rng.shuffle(uq_chroms)  # shuffle
 
         # This loop is actually just over one cell
         for chrom in uq_chroms:

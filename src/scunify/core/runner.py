@@ -85,15 +85,15 @@ class ScUnifyRunner:
     def _initialize_ray(self):
         if ray.is_initialized():
             return
-        init_kwargs = {"ignore_reinit_error": True, "local_mode": False}
-
+        init_kwargs = dict(ignore_reinit_error=True, local_mode=False)
+        
         init_kwargs["_temp_dir"] = str(self._temp_dir)
         init_kwargs["num_cpus"] = self.total_cpus
         if self.gpu_indices:
             init_kwargs["num_gpus"] = len(self.gpu_indices)
         else:
-            init_kwargs["num_gpus"] = self.total_gpus
-
+            init_kwargs["num_gpus"] = self.total_gpus 
+        
         __PROJECT_ROOT = str(Path(__file__).resolve().parent.parent.parent.parent)
         env_vars = {
             "PYTHONPATH": __PROJECT_ROOT,
@@ -101,8 +101,24 @@ class ScUnifyRunner:
         }
         if self.gpu_indices:
             env_vars["CUDA_VISIBLE_DEVICES"] = ",".join(map(str, self.gpu_indices))
+        
+        # Exclude large files from runtime_env to avoid package size limit
+        excludes = [
+            "resources/",  # 모든 모델 파일들 제외
+            "test/",       # 테스트 데이터 제외
+            ".git/",
+            ".vscode/",
+            ".ruff_cache/",
+            "__pycache__/",
+            "*.pyc",
+            "*.pyo",
+            "*.h5ad",      # h5ad 데이터 파일 제외
+            "Foundations/", # Foundations 원본 코드 제외
+        ]
+        
         init_kwargs["runtime_env"] = {
             "working_dir": __PROJECT_ROOT,
+            "excludes": excludes,
             "env_vars": env_vars,
         }
         ray.init(**init_kwargs)
@@ -212,7 +228,7 @@ class ScUnifyRunner:
             run_cfg = {
                 "failure_config": FailureConfig(max_failures=0),
                 "storage_path": str(self._storage_dir) if self._storage_dir else None,
-                "verbose": self.verbose,
+                #"verbose": self.verbose,
             }
             t.accelerate = self.accel_cfg
             t.t_load_d = t_load_data

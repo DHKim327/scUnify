@@ -25,12 +25,27 @@ def inference_loop_per_worker(inference_loop_config):
       - main process만 .npy(+ .json) 저장
       - 모든 워커에서 ray_train.report(...) 1회 호출
     """
+    # --------- Config / Inputs ---------
+    cfg = inference_loop_config.get("cfg")
+    
+    import random
+    import numpy as np
+    
+    seed = cfg.get("inference", {}).get("seed", 0)
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+        # Set deterministic behavior for CUDA operations
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
+    
     # Set Worker GPU for DDP
     if torch.cuda.is_available():
         local_rank = int(os.environ.get("LOCAL_RANK", "0"))
         torch.cuda.set_device(local_rank)
-    # --------- Config / Inputs ---------
-    cfg = inference_loop_config.get("cfg")
+    
     progress = inference_loop_config.get("progress_actor")
     adata = ray.get(cfg.get("adata_ref"))
     save_key = cfg.save_key

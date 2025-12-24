@@ -36,6 +36,7 @@ class ScGPTDataset(Dataset):
             max_length=1200,
             sampling=True,
             keep_first_n_tokens=1,
+            seed=config.inference.get('seed', 42)
         )
         self.sampler = SequentialSampler(self)
 
@@ -259,6 +260,7 @@ class DataCollator:
     max_length: int | None = None
     sampling: bool = True
     keep_first_n_tokens: int = 1
+    seed: int = 0  # for reproducibility
 
     def __post_init__(self):
         if self.do_padding:
@@ -272,6 +274,10 @@ class DataCollator:
 
         if self.keep_first_n_tokens < 0 or self.keep_first_n_tokens > self.max_length:
             raise ValueError(f"`keep_first_n_tokens` must be between 0 and `max_length` ({self.max_length}).")
+        
+        # Generator for reproducible sampling
+        self.generator = torch.Generator()
+        self.generator.manual_seed(self.seed)
 
     def __call__(self, examples: list[dict[str, torch.Tensor]]) -> dict[str, torch.Tensor]:
         """
@@ -381,13 +387,16 @@ class DataCollator:
         # and expressions, although it is probably a nice argmentation.
         device = genes.device
         if self.keep_first_n_tokens == 0:
-            indices = torch.randperm(len(genes), device=device)[:max_length]
+            # Use generator for reproducibility (CPU only), then move to device
+            indices = torch.randperm(len(genes), generator=self.generator)[:max_length]
+            indices = indices.to(device)
             return genes[indices], expressions[indices]
 
         # keep the first n tokens unchanged
         _n = self.keep_first_n_tokens
-        indices = torch.randperm(len(genes) - _n, device=device)[: max_length - _n]
-        indices = torch.cat([torch.arange(_n), indices + _n], dim=0)
+        indices = torch.randperm(len(genes) - _n, generator=self.generator)[: max_length - _n]
+        indices = indices.to(device)
+        indices = torch.cat([torch.arange(_n, device=device), indices + _n], dim=0)
         return genes[indices], expressions[indices]
 
     def _pad(
@@ -422,7 +431,7 @@ class DataCollator:
         return genes, expressions
 
 
-def _digitize(x: np.ndarray, bins: np.ndarray, side="both") -> np.ndarray:
+def _digitize(x: np.ndarray, bins: np.ndarray, side="both", rng=None) -> np.ndarray:
     """
     Digitize the data into bins. This method spreads data uniformly when bins
     have same values.
@@ -436,6 +445,8 @@ def _digitize(x: np.ndarray, bins: np.ndarray, side="both") -> np.ndarray:
     side (:class:`str`, optional):
         The side to use for digitization. If "one", the left side is used. If
         "both", the left and right side are used. Default to "one".
+    rng (:class:`np.random.RandomState`, optional):
+        Random number generator for reproducibility. If None, uses global np.random.
 
     Returns
     -------
@@ -444,13 +455,16 @@ def _digitize(x: np.ndarray, bins: np.ndarray, side="both") -> np.ndarray:
     """
     assert x.ndim == 1 and bins.ndim == 1
 
+    if rng is None:
+        rng = np.random  # fallback to global state
+
     left_digits = np.digitize(x, bins)
     if side == "one":
         return left_digits
 
     right_difits = np.digitize(x, bins, right=True)
 
-    rands = np.random.rand(len(x))  # uniform random numbers
+    rands = rng.rand(len(x))  # uniform random numbers
 
     digits = rands * (right_difits - left_digits) + left_digits
     digits = np.ceil(digits).astype(np.int64)

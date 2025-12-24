@@ -13,7 +13,14 @@ class ScGPTWrapper(nn.Module):
             expr,
             src_key_padding_mask=src_key_padding_mask,
         )
-        return embedding[:, 0, :]
+        # Extract CLS token embedding
+        embedding = embedding[:, 0, :]  # (batch_size, embed_dim)
+        
+        # L2 normalization (same as original scGPT implementation)
+        # Original: cell_embeddings / np.linalg.norm(cell_embeddings, axis=1, keepdims=True)
+        embedding = torch.nn.functional.normalize(embedding, p=2, dim=1)
+        
+        return embedding
 
 
 # -------------------------------- Load model utils --------------------------------#

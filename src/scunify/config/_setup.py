@@ -37,7 +37,7 @@ def _create_scfoundation_config(resource_dir: Path, config_dir: Path):
 
     config_data = {
         "model_name": "scFoundation",
-        "preprocessing": {"normalize_total": 10000.0, "log1p": True},
+        "preprocessing": {"option" : 'F',"normalize_total": 10000.0, "log1p": True},
         "inference": {
             "version": "cell",
             "pool_type": "all",
@@ -82,6 +82,7 @@ def _create_scgpt_config(resource_dir: Path, config_dir: Path):
             "subset_hvg": False,
         },
         "inference": {
+            "seed": 0,
             "batch_size": 128,
             "num_workers": 8,
         },
@@ -136,6 +137,7 @@ def _create_uce_config(resource_dir: Path, config_dir: Path):
             "hv_genes": None,
         },
         "inference": {
+            "seed" : 0,
             "nlayers": 4,  # or 33
             "batch_size": 64,
             "num_workers": 4,
@@ -235,22 +237,92 @@ def _validate_resources(resource_dir: Path, model_name: str) -> None:
     print(f"[{model_name}] All Resource Files are validated.")
 
 
-def setup(resource_dir: str, config_dir: str):
-    resource_path = Path(resource_dir)
-    config_dir = Path(config_dir)
+def setup(resource_dir: str, config_dir: str, auto_download: bool = False):
+    """
+    Setup configuration files for scUnify models
+    
+    This function validates model resources and creates configuration files.
+    It can optionally download missing models automatically.
+    
+    Args:
+        resource_dir: Directory containing model weights and resources
+        config_dir: Directory to save generated configuration files
+        auto_download: If True, automatically download missing models (default: False)
+    
+    Examples:
+        >>> # Basic setup (validation only)
+        >>> setup("./resources", "./configs")
+        
+        >>> # Setup with auto-download
+        >>> setup("./resources", "./configs", auto_download=True)
+    
+    Raises:
+        NotADirectoryError: If resource_dir is not a valid directory
+    """
+    resource_path = Path(resource_dir).expanduser().resolve()
+    config_dir = Path(config_dir).expanduser().resolve()
     config_dir.mkdir(parents=True, exist_ok=True)
+    
     if not resource_path.is_dir():
-        raise NotADirectoryError(f"Provided path is not a directory: {resource_dir}")
+        resource_path.mkdir(parents=True, exist_ok=True)
+        print(f"📁 Created resource directory: {resource_path}")
+
+    print(f"\n{'='*60}")
+    print(f"🚀 scUnify Setup")
+    print(f"{'='*60}")
+    print(f"Resource Directory: {resource_path}")
+    print(f"Config Directory: {config_dir}")
+    print(f"Auto Download: {auto_download}")
+    print(f"{'='*60}\n")
+
+    success_count = 0
+    failed_models = []
 
     for model_name in RESOURCES_LISTS.keys():
         try:
+            print(f"\n[{model_name}] Starting validation...")
             _validate_resources(resource_path, model_name)
+            
+            print(f"[{model_name}] Creating configuration files...")
             globals()[f"_create_{model_name.lower()}_config"](resource_path, config_dir=config_dir)
-            print(f"'{model_name}' Configuration File is being created...")
+            success_count += 1
 
         except (FileNotFoundError, ValueError) as e:
-            print(f"[Warning] '{model_name}' Model Configuration is not created: {e}")
-            print(f"'{model_name}' Model is skipped.")
-            continue
+            if auto_download:
+                print(f"\n⚠️  [{model_name}] Resources missing. Attempting auto-download...")
+                try:
+                    from ._download import download_model
+                    download_model(model_name, resource_path)
+                    
+                    # Re-validate after download
+                    print(f"\n[{model_name}] Re-validating after download...")
+                    _validate_resources(resource_path, model_name)
+                    
+                    print(f"[{model_name}] Creating configuration files...")
+                    globals()[f"_create_{model_name.lower()}_config"](resource_path, config_dir=config_dir)
+                    success_count += 1
+                    
+                except Exception as download_error:
+                    print(f"❌ [{model_name}] Auto-download failed: {download_error}")
+                    failed_models.append((model_name, str(download_error)))
+                    continue
+            else:
+                print(f"\n⚠️  [{model_name}] Configuration not created: {e}")
+                print(f"     To download this model, run:")
+                print(f"     >>> from scunify.config import download_model")
+                print(f"     >>> download_model('{model_name}', '{resource_dir}')")
+                failed_models.append((model_name, str(e)))
+                continue
 
-    print("\nInitial Setup is completed.")
+    print(f"\n{'='*60}")
+    print(f"✅ Setup Completed!")
+    print(f"{'='*60}")
+    print(f"Successfully configured: {success_count}/{len(RESOURCES_LISTS)} models")
+    
+    if failed_models:
+        print(f"\n⚠️  Failed models: {len(failed_models)}")
+        for model_name, error in failed_models:
+            print(f"   - {model_name}: {error[:80]}...")
+    else:
+        print("🎉 All models configured successfully!")
+    print()
