@@ -46,14 +46,11 @@ class ScFoundationDataset(Dataset):
             gexpr_feature = adata.X
         
         self.gexpr_feature = pd.DataFrame(gexpr_feature, index=idx, columns=col)
-        
-        # main_gene_selection: 19264 genes로 변환 (원논문과 동일)
-        if self.gexpr_feature.shape[1] < 19264:
-            print(f'Converting gene feature from {self.gexpr_feature.shape[1]} to 19264 genes')
-            self.gexpr_feature = self._main_gene_selection(self.gexpr_feature, self.gene_list)
-            assert self.gexpr_feature.shape[1] >= 19264, "Gene selection failed"
-        
         self.N = self.gexpr_feature.shape[0]
+        
+        # Lazy loading: gene selection을 __getitem__에서 수행 (메모리 효율적)
+        print(f'Lazy loading enabled: gene selection will be done per cell')
+        print(f'Original gene count: {self.gexpr_feature.shape[1]} → will convert to 19264 in __getitem__')
         
         # 전처리 옵션
         self.pre_normalized = config.preprocessing.get("option", "F")  # 'F', 'T', 'A'
@@ -93,52 +90,36 @@ class ScFoundationDataset(Dataset):
         return self.N
     
     def __getitem__(self, idx):
-        """
-        원논문 get_embedding.py Line 159-184를 정확히 재현.
+        # Lazy gene selection: 해당 cell만 19264 genes로 변환
+        cell_data = self.gexpr_feature.iloc[idx:idx+1, :]  # (1, M)
         
-        Foundations 코드:
-        ```python
-        if args.pre_normalized == 'F':
-            tmpdata = (np.log1p(gexpr_feature.iloc[i,:]/(gexpr_feature.iloc[i,:].sum())*1e4)).tolist()
-        elif args.pre_normalized == 'T':
-            tmpdata = (gexpr_feature.iloc[i,:]).tolist()
-        elif args.pre_normalized == 'A':
-            tmpdata = (gexpr_feature.iloc[i,:-1]).tolist()
+        if cell_data.shape[1] < 19264:
+            cell_data = self._main_gene_selection(cell_data, self.gene_list)
         
-        if args.pre_normalized == 'A':
-            totalcount = gexpr_feature.iloc[i,-1]
-        else:
-            totalcount = gexpr_feature.iloc[i,:].sum()
+        # 1D Series로 변환 (이후 로직에 맞추기)
+        cell_series = cell_data.iloc[0, :]
         
-        if args.tgthighres[0] == 'f':
-            pretrain_gene_x = torch.tensor(tmpdata+[np.log10(totalcount*float(args.tgthighres[1:])),np.log10(totalcount)])
-        elif args.tgthighres[0] == 'a':
-            pretrain_gene_x = torch.tensor(tmpdata+[np.log10(totalcount)+float(args.tgthighres[1:]),np.log10(totalcount)])
-        elif args.tgthighres[0] == 't':
-            pretrain_gene_x = torch.tensor(tmpdata+[float(args.tgthighres[1:]),np.log10(totalcount)])
-        ```
-        """
         # Pre-normalization (원논문 Line 159-165)
         if self.pre_normalized == 'F':
             # normalize_total=10000 + log1p
-            cell_sum = self.gexpr_feature.iloc[idx, :].sum()
+            cell_sum = cell_series.sum()
             if cell_sum > 0:
-                tmpdata = np.log1p(self.gexpr_feature.iloc[idx, :] / cell_sum * 1e4)
+                tmpdata = np.log1p(cell_series / cell_sum * 1e4)
             else:
-                tmpdata = self.gexpr_feature.iloc[idx, :]
+                tmpdata = cell_series
             tmpdata = tmpdata.tolist()
         elif self.pre_normalized == 'T':
-            tmpdata = self.gexpr_feature.iloc[idx, :].tolist()
+            tmpdata = cell_series.tolist()
         elif self.pre_normalized == 'A':
-            tmpdata = self.gexpr_feature.iloc[idx, :-1].tolist()
+            tmpdata = cell_series[:-1].tolist()
         else:
             raise ValueError(f'pre_normalized must be T, F or A, got {self.pre_normalized}')
         
         # Totalcount (원논문 Line 167-170)
         if self.pre_normalized == 'A':
-            totalcount = self.gexpr_feature.iloc[idx, -1]
+            totalcount = cell_series.iloc[-1]
         else:
-            totalcount = self.gexpr_feature.iloc[idx, :].sum()
+            totalcount = cell_series.sum()
         
         # Resolution token (원논문 Line 172-179)
         if self.tg_mode == 'f':
