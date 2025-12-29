@@ -75,6 +75,8 @@ def download_scgpt(resource_dir: Path) -> None:
 def download_uce(resource_dir: Path) -> None:
     """
     Download UCE weights and embeddings from Figshare
+    
+    Downloads individual files using Figshare API to get direct download URLs.
 
     Args:
         resource_dir: Base resource directory (e.g., ./resources)
@@ -82,23 +84,93 @@ def download_uce(resource_dir: Path) -> None:
     output_dir = resource_dir / "UCE"
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Figshare dataset URL
-    url = "https://figshare.com/ndownloader/articles/24320806/versions/5"
-    output_file = output_dir / "uce_data.zip"
-
     print("📥 Downloading UCE from Figshare...")
     print(f"   Output: {output_dir}")
 
-    _figshare_download(url, output_file)
+    # Get file information from Figshare API
+    article_id = 24320806
+    api_url = f"https://api.figshare.com/v2/articles/{article_id}"
+    
+    print("\n📡 Fetching file list from Figshare API...")
+    try:
+        response = requests.get(api_url, timeout=30)
+        response.raise_for_status()
+        metadata = response.json()
+    except Exception as e:
+        raise RuntimeError(f"Failed to fetch metadata from Figshare API: {e}")
 
-    # Extract zip file
-    if output_file.exists() and output_file.suffix == ".zip":
-        import zipfile
+    files_to_download = metadata.get('files', [])
+    
+    # Filter out files we don't need (like example h5ad file)
+    required_files = [
+        'species_offsets.pkl',
+        'species_chrom.csv',
+        '4layer_model.torch',
+        'all_tokens.torch',
+        'protein_embeddings.tar.gz',
+        '33l_8ep_1024t_1280.torch'
+    ]
+    
+    files_to_download = [f for f in files_to_download if f['name'] in required_files]
+    
+    print(f"\n📦 Found {len(files_to_download)} files to download")
+    print(f"Total size: {sum(f['size'] for f in files_to_download) / (1024**3):.2f} GB\n")
 
-        print(f"📦 Extracting {output_file.name}...")
-        with zipfile.ZipFile(output_file, "r") as zip_ref:
-            zip_ref.extractall(output_dir)
-        print("✅ UCE download completed!")
+    # Download each file
+    for idx, file_info in enumerate(files_to_download, 1):
+        filename = file_info['name']
+        download_url = file_info['download_url']
+        file_size_gb = file_info['size'] / (1024**3)
+        
+        output_file = output_dir / filename
+        
+        print(f"[{idx}/{len(files_to_download)}] {filename} ({file_size_gb:.2f} GB)")
+        
+        if output_file.exists():
+            print(f"   ✓ File already exists, skipping...")
+            continue
+        
+        try:
+            # Download with progress bar
+            response = requests.get(download_url, stream=True, timeout=300)
+            response.raise_for_status()
+            
+            total_size = int(response.headers.get('content-length', 0))
+            block_size = 8192
+            
+            progress_bar = tqdm(
+                total=total_size,
+                unit='iB',
+                unit_scale=True,
+                desc=f"   Downloading"
+            )
+            
+            with open(output_file, 'wb') as f:
+                for data in response.iter_content(block_size):
+                    progress_bar.update(len(data))
+                    f.write(data)
+            progress_bar.close()
+            
+            print(f"   ✓ Downloaded successfully")
+            
+        except Exception as e:
+            print(f"   ❌ Failed to download: {e}")
+            if output_file.exists():
+                output_file.unlink()  # Clean up partial download
+            raise
+    
+    # Extract protein_embeddings.tar.gz
+    protein_tar = output_dir / "protein_embeddings.tar.gz"
+    if protein_tar.exists():
+        print("\n📦 Extracting protein_embeddings.tar.gz...")
+        try:
+            with tarfile.open(protein_tar, 'r:gz') as tar:
+                tar.extractall(path=output_dir)
+            print("   ✓ Extracted successfully")
+        except Exception as e:
+            print(f"   ⚠️  Failed to extract: {e}")
+    
+    print("\n✅ UCE download completed!")
 
 
 def download_scfoundation(resource_dir: Path) -> None:
