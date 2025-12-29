@@ -103,13 +103,13 @@ def download_uce(resource_dir: Path) -> None:
 
 def download_scfoundation(resource_dir: Path) -> None:
     """
-    Download scFoundation weights from HuggingFace
+    Download scFoundation weights from HuggingFace and GitHub
 
     Args:
         resource_dir: Base resource directory (e.g., ./resources)
     """
     try:
-        from huggingface_hub import snapshot_download
+        from huggingface_hub import hf_hub_download
     except ImportError:
         raise ImportError(
             "huggingface_hub is required for downloading scFoundation. "
@@ -119,17 +119,68 @@ def download_scfoundation(resource_dir: Path) -> None:
     output_dir = resource_dir / "scFoundation"
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    print("📥 Downloading scFoundation from HuggingFace...")
-    print(f"   Repository: genbio-ai/scFoundation")
+    print("📥 Downloading scFoundation...")
     print(f"   Output: {output_dir}")
 
-    snapshot_download(
-        repo_id="genbio-ai/scFoundation",
-        local_dir=str(output_dir),
-        allow_patterns=["*.ckpt", "*.tsv"],  # Only download necessary files
-        resume_download=True,
-    )
-    print("✅ scFoundation download completed!")
+    # 1. Download model checkpoint from HuggingFace
+    print("\n[1/2] Downloading models.ckpt from HuggingFace (genbio-ai/scFoundation)...")
+    try:
+        hf_hub_download(
+            repo_id="genbio-ai/scFoundation",
+            filename="model.ckpt",
+            local_dir=str(output_dir),
+            local_dir_use_symlinks=False,
+            resume_download=True,
+        )
+        # Rename to models.ckpt if downloaded as model.ckpt
+        downloaded_ckpt = output_dir / "model.ckpt"
+        target_ckpt = output_dir / "models.ckpt"
+        if downloaded_ckpt.exists() and not target_ckpt.exists():
+            downloaded_ckpt.rename(target_ckpt)
+            print("   ✓ models.ckpt downloaded")
+    except Exception as e:
+        print(f"   ⚠️  HuggingFace download failed, trying alternative...")
+        # Fallback: try 'models.ckpt' directly
+        try:
+            hf_hub_download(
+                repo_id="genbio-ai/scFoundation",
+                filename="models.ckpt",
+                local_dir=str(output_dir),
+                local_dir_use_symlinks=False,
+                resume_download=True,
+            )
+            print("   ✓ models.ckpt downloaded")
+        except Exception as e2:
+            print(f"   ❌ Failed to download models.ckpt: {e2}")
+
+    # 2. Download TSV file from GitHub
+    print("\n[2/2] Downloading OS_scRNA_gene_index.19264.tsv from GitHub...")
+    github_url = "https://raw.githubusercontent.com/biomap-research/scFoundation/main/OS_scRNA_gene_index.19264.tsv"
+    tsv_path = output_dir / "OS_scRNA_gene_index.19264.tsv"
+
+    if tsv_path.exists():
+        print(f"   ✓ File already exists: {tsv_path.name}")
+    else:
+        try:
+            response = requests.get(github_url, stream=True)
+            response.raise_for_status()
+            
+            total_size = int(response.headers.get('content-length', 0))
+            block_size = 1024
+            
+            progress_bar = tqdm(total=total_size, unit='iB', unit_scale=True, desc="   TSV file")
+            with open(tsv_path, 'wb') as f:
+                for data in response.iter_content(block_size):
+                    progress_bar.update(len(data))
+                    f.write(data)
+            progress_bar.close()
+            
+            print("   ✓ OS_scRNA_gene_index.19264.tsv downloaded")
+        except Exception as e:
+            print(f"   ❌ Failed to download TSV file: {e}")
+            print(f"   You can manually download from: {github_url}")
+
+    print("\n✅ scFoundation download completed!")
 
 
 def download_model(
