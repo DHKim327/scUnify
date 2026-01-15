@@ -12,7 +12,8 @@ from ray.train.torch import TorchTrainer
 
 from ..utils import load_yaml
 from .logger import ProgressActor, ProgressUI
-from .loops.inference_loop import inference_loop_per_worker
+from .data_actor import DataLoaderActor
+
 
 warnings.filterwarnings("ignore")
 
@@ -83,6 +84,10 @@ class ScUnifyRunner:
         self._initialize_ray()
 
     def _initialize_ray(self):
+        import os
+        # Worker Startup Timeout 증가 (24시간) - 대규모 데이터셋 처리 시 필요
+        os.environ.setdefault("RAY_TRAIN_WORKER_GROUP_START_TIMEOUT_S", "86400")
+        
         if ray.is_initialized():
             return
         init_kwargs = dict(ignore_reinit_error=True, local_mode=False)
@@ -94,26 +99,29 @@ class ScUnifyRunner:
         else:
             init_kwargs["num_gpus"] = self.total_gpus 
         
+        # working_dir와 excludes는 ray.init에서 설정
         __PROJECT_ROOT = str(Path(__file__).resolve().parent.parent.parent.parent)
+        
         env_vars = {
             "PYTHONPATH": __PROJECT_ROOT,
             "RAY_TRAIN_ENABLE_V2_MIGRATION_WARNINGS": "0",
+            "MPLBACKEND": "Agg",  # Headless backend for workers
         }
+        
         if self.gpu_indices:
             env_vars["CUDA_VISIBLE_DEVICES"] = ",".join(map(str, self.gpu_indices))
         
-        # Exclude large files from runtime_env to avoid package size limit
         excludes = [
-            "resources/",  # 모든 모델 파일들 제외
-            "test/",       # 테스트 데이터 제외
+            "resources/",
+            "test/",
             ".git/",
             ".vscode/",
             ".ruff_cache/",
             "__pycache__/",
             "*.pyc",
             "*.pyo",
-            "*.h5ad",      # h5ad 데이터 파일 제외
-            "Foundations/", # Foundations 원본 코드 제외
+            "*.h5ad",
+            "Foundations/",
         ]
         
         init_kwargs["runtime_env"] = {
@@ -121,6 +129,7 @@ class ScUnifyRunner:
             "excludes": excludes,
             "env_vars": env_vars,
         }
+        
         ray.init(**init_kwargs)
 
     def _resource_check(self):
@@ -156,6 +165,19 @@ class ScUnifyRunner:
                 )
 
     def shutdown(self):
+        # Actor 정리
+        if hasattr(self, 'data_actors') and self.data_actors:
+            if self.verbose:
+                print("[Runner] Cleaning up DataLoader Actors...")
+            for model_name, actor in self.data_actors.items():
+                try:
+                    ray.get(actor.clear_cache.remote())
+                    ray.kill(actor)
+                except Exception as e:
+                    if self.verbose:
+                        print(f"  - Failed to cleanup {model_name} actor: {e}")
+            self.data_actors = {}
+        
         if ray.is_initialized():
             ray.shutdown()
 
@@ -167,35 +189,90 @@ class ScUnifyRunner:
                 except Exception as e:
                     print(f"[Runner.cleanup] Failed to remove {p}: {e}")
 
-    def _prepare_adata_payloads(self) -> list[dict[str, Any]]:
+    def _create_data_actors(self) -> dict:
         """
-        같은 adata 객체/경로는 공유하도록 캐싱해서 payload 생성.
-        - adata 있으면 → ray.put(adata)
-        - adata_dir 있으면 → scanpy.read_h5ad()로 로드 후 ray.put(adata)
+        모델별 DataLoader Actor 생성
+        
+        각 모델 환경(scunify_scgpt, scunify_uce, scunify_scfoundation)에서
+        별도의 Actor를 생성하여 같은 환경의 Worker들이 데이터를 공유할 수 있게 함.
+        
+        Returns:
+            dict: {model_name: DataLoaderActor} 매핑
         """
-        import numpy as np
-        import scanpy as sc
-        import scipy.sparse as sp
+        # 사용되는 모델 목록 추출
+        model_names = set(t.get("model_name") for t in self.tasks)
+        
+        actors = {}
+        for model_name in model_names:
+            env_name = f"scunify_{model_name.lower()}"
+            
+            if self.verbose:
+                print(f"[Runner] Creating DataLoader Actor for {model_name} (env: {env_name})...")
+            
+            # 모델 환경에서 실행되는 Actor 생성
+            actor = DataLoaderActor.options(
+                runtime_env={
+                    "conda": env_name,
+                    "env_vars": {"MPLBACKEND": "Agg"},  # matplotlib headless
+                },
+                name=f"data_loader_{model_name.lower()}",
+            ).remote()
+            
+            actors[model_name] = actor
+        
+        return actors
 
-        cache: dict[str, Any] = {}
-
+    def _prepare_adata_payloads(self) -> float:
+        """
+        모델별 Actor를 통해 데이터 로드
+        
+        각 모델 환경의 Actor가 데이터를 로드하여 Object Store에 저장.
+        같은 모델의 Worker들은 zero-copy로 데이터 공유.
+        
+        Returns:
+            float: 데이터 로드 시간 (초)
+        """
+        t0 = time.time()
+        
+        # 모델별 Actor 생성
+        self.data_actors = self._create_data_actors()
+        
+        # 모델별로 필요한 데이터 경로 그룹핑
+        model_paths: dict[str, set[str]] = {}
         for t in self.tasks:
-            if t.save_key not in cache:
-                ad = sc.read_h5ad(t.adata_dir)
-                if sp.issparse(ad.X):
-                    ad.X = ad.X.astype(np.float32)
-                else:
-                    ad.X = np.asarray(ad.X, dtype=np.float32, order="C")
-                cache[t.save_key] = ray.put(ad)
-            t.adata_ref = cache[t.save_key]
-        self.adata_cache = cache
+            model_name = t.get("model_name")
+            path = str(t.adata_dir)
+            if model_name not in model_paths:
+                model_paths[model_name] = set()
+            model_paths[model_name].add(path)
+        
+        # 각 Actor에서 데이터 프리로드
+        preload_futures = {}
+        for model_name, paths in model_paths.items():
+            actor = self.data_actors[model_name]
+            if self.verbose:
+                print(f"[Runner] Preloading {len(paths)} dataset(s) for {model_name}...")
+            preload_futures[model_name] = actor.preload.remote(list(paths))
+        
+        # 프리로드 완료 대기 및 결과 저장
+        self.adata_refs: dict[str, dict[str, Any]] = {}
+        for model_name, future in preload_futures.items():
+            self.adata_refs[model_name] = ray.get(future)
+            if self.verbose:
+                print(f"[Runner] {model_name} data loaded!")
+        
+        # 각 task에 adata_ref 할당
+        for t in self.tasks:
+            model_name = t.get("model_name")
+            path = str(t.adata_dir)
+            t.adata_ref = self.adata_refs[model_name][path]
+        
+        return time.time() - t0
 
     # ------------------ 실행 ------------------
     def run(self) -> dict[str, list[dict]]:
-        # Data Load Time logging
-        t0 = time.time()
-        self._prepare_adata_payloads()
-        t_load_data = time.time() - t0
+        # Data Load (모델별 Actor를 통해 로드)
+        t_load_data = self._prepare_adata_payloads()
 
         # Progress bar
         progress = ProgressActor.remote()
@@ -206,8 +283,11 @@ class ScUnifyRunner:
             for rank in range(int(n_gpus)):
                 ray.get(progress.register.remote(task_name, rank, total_batches, bs))
 
-        @ray.remote
-        def _launch(task_cfg, scaling_cfg_kwargs, run_cfg_kwargs, progress_actor):
+        def _launch_wrapper(task_cfg, scaling_cfg_kwargs, run_cfg_kwargs, progress_actor):
+            """Wrapper function that will be executed with runtime_env"""
+            # Worker 환경에서 inference_loop import (accelerate 의존)
+            from scunify.core.loops.inference_loop import inference_loop_per_worker
+            
             trainer = TorchTrainer(
                 inference_loop_per_worker,
                 train_loop_config={"cfg": task_cfg, "progress_actor": progress_actor},
@@ -230,11 +310,69 @@ class ScUnifyRunner:
                 "storage_path": str(self._storage_dir) if self._storage_dir else None,
                 #"verbose": self.verbose,
             }
+            
+            # task의 model_name에 따라 conda 환경 결정
+            runtime_env = self._get_runtime_env(t)
+            
+            # ray.remote에 runtime_env 전달
+            _launch_remote = ray.remote(runtime_env=runtime_env)(_launch_wrapper)
+            
             t.accelerate = self.accel_cfg
             t.t_load_d = t_load_data
-            jobs.append(_launch.remote(t, scaling_cfg, run_cfg, progress))
+            jobs.append(_launch_remote.remote(t, scaling_cfg, run_cfg, progress))
 
         ui = ProgressUI(progress, refresh_hz=4, poll_interval=0.25)
         ui.run_until_complete()
 
         results = ray.get(jobs)
+    
+    def _get_runtime_env(self, task_cfg) -> dict:
+        """
+        task 설정에서 model_name을 읽어 적절한 conda 환경을 반환
+        
+        Args:
+            task_cfg: task 설정 (model_name 포함)
+            
+        Returns:
+            runtime_env 딕셔너리
+        """
+        import subprocess
+        
+        model_name = task_cfg.get("model_name")
+        if not model_name:
+            raise ValueError(f"Task configuration missing 'model_name': {task_cfg}")
+        
+        env_name = f"scunify_{model_name.lower()}"
+        
+        # conda 환경 존재 확인
+        try:
+            result = subprocess.run(
+                ["conda", "env", "list"],
+                capture_output=True,
+                text=True,
+                check=False
+            )
+            
+            if env_name not in result.stdout:
+                raise RuntimeError(
+                    f"Conda environment '{env_name}' not found.\n"
+                    f"\n"
+                    f"Please run setup first:\n"
+                    f"  >>> import scunify as scu\n"
+                    f"  >>> scu.setup(\n"
+                    f"  ...     resource_dir='./resources',\n"
+                    f"  ...     config_dir='./configs',\n"
+                    f"  ...     create_conda_envs=True\n"
+                    f"  ... )\n"
+                    f"\n"
+                    f"This will create the required conda environment: {env_name}"
+                )
+        except FileNotFoundError:
+            raise RuntimeError(
+                "conda command not found. Please install conda first."
+            )
+        
+        # task 레벨 runtime_env: conda 환경 이름만
+        return {
+            "conda": env_name,
+        }

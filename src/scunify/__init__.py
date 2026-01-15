@@ -4,8 +4,6 @@ from . import core, inferencer, registry, utils
 from .config import ScUnifyConfig, setup
 from .core.runner import ScUnifyRunner
 
-# Essential functions
-from .utils import read_h5ad
 
 __all__ = [
     "ScUnifyConfig",

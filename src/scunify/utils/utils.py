@@ -1,6 +1,5 @@
 from typing import Any
 
-import scanpy as sc
 import yaml
 
 
@@ -25,7 +24,3 @@ def load_yaml(file_path: str) -> Any:
     with open(file_path) as file:
         data = yaml.safe_load(file)
     return data
-
-
-def read_h5ad(file_path: str):
-    return sc.read_h5ad(file_path)

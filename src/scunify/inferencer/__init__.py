@@ -1,11 +1,8 @@
 import re
-import sys as _sys
-from typing import Any, Dict, Type
+from typing import Type
 
-from ._scfoundation_inferencer import ScFoundationInferencer
-from ._scgpt_inferencer import ScGPTInferencer
-from ._uce_inferencer import UCEInferencer
-
+# Lazy imports
+__all__ = ["resolve_inferencer", "ScFoundationInferencer", "ScGPTInferencer", "UCEInferencer"]
 
 def _to_camel(name: str) -> str:
     parts = re.sub(r"[-_]+", " ", str(name)).strip().split()
@@ -18,12 +15,33 @@ _ALIAS = {
     "uce": "UCEInferencer",
 }
 
+_IMPORTED = {}
 
-def resolve_inferencer(cfg) -> type:
+
+def __getattr__(name):
+    """Lazy import inferencer classes"""
+    if name == "ScFoundationInferencer":
+        if name not in _IMPORTED:
+            from ._scfoundation_inferencer import ScFoundationInferencer
+            _IMPORTED[name] = ScFoundationInferencer
+        return _IMPORTED[name]
+    elif name == "ScGPTInferencer":
+        if name not in _IMPORTED:
+            from ._scgpt_inferencer import ScGPTInferencer
+            _IMPORTED[name] = ScGPTInferencer
+        return _IMPORTED[name]
+    elif name == "UCEInferencer":
+        if name not in _IMPORTED:
+            from ._uce_inferencer import UCEInferencer
+            _IMPORTED[name] = UCEInferencer
+        return _IMPORTED[name]
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+def resolve_inferencer(cfg) -> Type:
     """
     cfg.model_name 기준으로 inferencer 클래스를 반환.
-    - inferencer 패키지 __init__ 에서 이미 클래스를 import 해두었다는 전제.
-    - cfg에 'inferencer_class'가 있으면 그걸 우선 사용.
+    Lazy import로 필요할 때만 로드.
     """
     model_name = cfg.get("model_name")
     if not model_name:
@@ -33,6 +51,6 @@ def resolve_inferencer(cfg) -> type:
     cls_name = _ALIAS.get(key) or f"{_to_camel(model_name)}Inferencer"
 
     try:
-        return getattr(_sys.modules[__name__], cls_name)
+        return __getattr__(cls_name)
     except AttributeError:
-        raise ImportError(f"Inferencer class '{cls_name}' not found. Make sure scunify.inferencer.__init__ imports it.")
+        raise ImportError(f"Inferencer class '{cls_name}' not found.")

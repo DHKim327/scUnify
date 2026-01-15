@@ -23,23 +23,26 @@ classifiers = [
   "Programming Language :: Python :: 3.14",
 ]
 
-# scUnify 핵심 기능에 필요한 런타임 의존성 (import scunify 해서 인퍼런스 돌릴 때 필요한 것들)
-dependencies = [
-  "accelerate>=1",
-  "anndata>=0.9",
-  "einops>=0.8",
-  "h5py>=3.10",
-  "ipywidgets>=8.1.7",
-  "local-attention==1.11.2",
-  "numpy>=2",
-  "pandas>=2",
-  "ray[default,train]>=2.48",
+# 기본 dependencies는 비움 (Worker 환경 충돌 방지)
+dependencies = []
+
+# scUnify[core]: Master 전용 (경량!)
+# numpy/scanpy/scipy는 Worker 환경에서 관리
+optional-dependencies.core = [
+  "ray[default,train]>=2.48",  # Runner, Task 분산
+  "rich>=13.0",                 # ProgressUI
+  "pyyaml>=6.0",                # config 파일
+  "nvidia-ml-py>=11.450",       # GPU 모니터링 (pynvml)
+  "tqdm>=4.60",                 # 진행 표시
+]
+
+# scUnify[eval]: 평가 전용 (inference와 독립)
+optional-dependencies.eval = [
   "scanpy>=1.9",
-  "scib-metrics>=0.5.7",
-  "scikit-learn>=1.4",
-  "scipy>=1.11",
-  "session-info2>=0.2",
-  "zarr>=3",
+  "scib>=1.0",
+  "scvi-tools",
+  "numpy",       # 범위 제한 없음
+  "pandas>=2",
 ]
 
 optional-dependencies.dev = [

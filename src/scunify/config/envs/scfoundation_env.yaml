@@ -1,0 +1,16 @@
+name: scfoundation_env
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - numpy>=1.26,<2.0
+  - scipy>=1.11
+  - pandas>=2.0
+  - scanpy>=1.9
+  - einops>=0.8
+  - pip
+  - pip:
+      - torch>=2.0.0             # pip (CUDA 자동 감지)
+      # scunify[core]는 _setup.py에서 editable로 설치!
+      - local-attention==1.11.2
+      - accelerate>=1

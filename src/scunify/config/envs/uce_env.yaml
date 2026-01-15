@@ -1,0 +1,14 @@
+name: uce_env
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - numpy>=1.26,<2.0
+  - scipy>=1.11
+  - pandas>=2.0
+  - scanpy>=1.9
+  - tqdm>=4.60
+  - pip
+  - pip:
+      - torch>=2.0             # pip (CUDA 자동 감지)
+      - accelerate>=0.24

@@ -10,7 +10,6 @@ import pandas as pd
 import torch
 import torchtext
 
-torchtext.disable_torchtext_deprecation_warning()
 import torchtext.vocab as torch_vocab
 from torchtext.vocab import Vocab
 
