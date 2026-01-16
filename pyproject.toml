@@ -39,10 +39,16 @@ optional-dependencies.core = [
 # scUnify[eval]: 평가 전용 (inference와 독립)
 optional-dependencies.eval = [
   "scanpy>=1.9",
-  "scib>=1.0",
+  "scib-metrics>=0.5",   # scib 메트릭 (scib 대체)
   "scvi-tools",
-  "numpy",       # 범위 제한 없음
+  "numpy",               # 범위 제한 없음
   "pandas>=2",
+  "scipy>=1.11",
+  "plottable>=0.1.5",    # 이쁜 테이블 플로팅
+  "matplotlib>=3.5",
+  "tqdm>=4.60",
+  "scikit-learn>=1.0",   # MinMaxScaler
+  "jax[cuda12]>=0.4.20", # JAX CUDA 12 지원 (scib-metrics 의존성)
 ]
 
 optional-dependencies.dev = [
