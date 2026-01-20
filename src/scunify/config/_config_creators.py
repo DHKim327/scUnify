@@ -118,8 +118,8 @@ def create_uce_config(resource_dir: Path, config_dir: Path):
         "inference": {
             "seed": 0,
             "nlayers": 4,  # or 33
-            "batch_size": 64,
-            "num_workers": 4,
+            "batch_size": 25,
+            "num_workers": 0,
         },
         "resources": {
             "spec_chrom_csv_path": (resource_dir / "species_chrom.csv").as_posix(),

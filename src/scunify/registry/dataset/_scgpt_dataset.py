@@ -431,6 +431,10 @@ class DataCollator:
         return genes, expressions
 
 
+# Global RandomState for reproducible binning
+_BINNING_RNG = np.random.RandomState(42)
+
+
 def _digitize(x: np.ndarray, bins: np.ndarray, side="both", rng=None) -> np.ndarray:
     """
     Digitize the data into bins. This method spreads data uniformly when bins
@@ -446,7 +450,7 @@ def _digitize(x: np.ndarray, bins: np.ndarray, side="both", rng=None) -> np.ndar
         The side to use for digitization. If "one", the left side is used. If
         "both", the left and right side are used. Default to "one".
     rng (:class:`np.random.RandomState`, optional):
-        Random number generator for reproducibility. If None, uses global np.random.
+        Random number generator for reproducibility. If None, uses default RandomState(42).
 
     Returns
     -------
@@ -456,7 +460,7 @@ def _digitize(x: np.ndarray, bins: np.ndarray, side="both", rng=None) -> np.ndar
     assert x.ndim == 1 and bins.ndim == 1
 
     if rng is None:
-        rng = np.random  # fallback to global state
+        rng = _BINNING_RNG  # use fixed seed RandomState for reproducibility
 
     left_digits = np.digitize(x, bins)
     if side == "one":
