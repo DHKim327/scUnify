@@ -8,7 +8,7 @@ from ._validators import RESOURCES_LISTS, validate_resources
 from ._config_creators import CONFIG_CREATORS
 
 
-# Conda 환경 YAML 파일 경로  
+# Path to conda environment YAML files  
 _ENV_DIR = Path(__file__).resolve().parent / "envs"
 
 
@@ -106,11 +106,11 @@ def setup(
                 failed_models.append((model_name, str(e)))
                 continue
 
-    # ========== Conda 환경 생성 ==========
+    # ========== Create conda environments ==========
     if create_conda_envs and configured_models:
         _create_system_conda_envs(configured_models)
 
-    # ========== 최종 요약 ==========
+    # ========== Final summary ==========
     print(f"\n{'='*60}")
     print(f"✅ Setup Completed!")
     print(f"{'='*60}")
@@ -137,10 +137,10 @@ def setup(
 
 def _create_system_conda_envs(models: list[str]):
     """
-    시스템 conda에 모델별 환경 생성
+    Create per-model conda environments via system conda.
     
     Args:
-        models: 환경을 생성할 모델 리스트 (예: ["scGPT", "UCE", "scFoundation"])
+        models: List of models to create envs for (e.g., ["scGPT", "UCE", "scFoundation"])
     """
     print(f"\n{'='*60}")
     print(f"🔧 Creating System Conda Environments")
@@ -159,7 +159,7 @@ def _create_system_conda_envs(models: list[str]):
         
         print(f"[{i}/{len(models)}] Creating {env_name}...")
         
-        # conda env list로 이미 존재하는지 확인
+        # Check if the env already exists via conda env list
         try:
             result = subprocess.run(
                 ["conda", "env", "list"],
@@ -174,7 +174,7 @@ def _create_system_conda_envs(models: list[str]):
         except Exception as e:
             print(f"    ⚠️  Could not check existing envs: {e}")
         
-        # 환경 생성
+        # Create the environment
         try:
             print(f"    📦 Installing packages (this may take 10-15 minutes)...")
             subprocess.run([
@@ -185,7 +185,7 @@ def _create_system_conda_envs(models: list[str]):
             
             print(f"    ✅ {env_name} created successfully!")
             
-            # scunify[core] editable 설치 (YAML이 아닌 로컬에서!)
+            # Install scunify[core] in editable mode (local, not from YAML)
             print(f"    🔗 Installing scunify[core] in editable mode...")
             project_root = _ENV_DIR.parent.parent.parent.parent  # Github/scUnify
             subprocess.run([

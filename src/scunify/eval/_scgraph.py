@@ -1,6 +1,6 @@
 """
-scGraph 래퍼 (Islander 기반)
-Consensus distance 기반 embedding 품질 평가
+scGraph wrapper (Islander-based)
+Consensus distance-based embedding quality evaluation
 
 Reference: Islander/src/scGraph.py
 """
@@ -20,28 +20,28 @@ if TYPE_CHECKING:
 
 
 class ScGraphWrapper:
-    """scGraph: Consensus distance 기반 embedding 평가
+    """scGraph: Consensus distance-based embedding evaluation.
     
-    각 batch별로 cell type centroid를 계산하고,
-    consensus distance matrix와 embedding의 거리를 비교하여
-    embedding 품질을 평가합니다.
+    Computes cell-type centroids per batch,
+    compares the embedding distance structure against the
+    consensus distance matrix to evaluate embedding quality.
     
     Parameters
     ----------
     adata
-        AnnData 객체 (embedding이 obsm에 저장되어 있어야 함)
+        AnnData object (embeddings must be stored in obsm)
     embedding_keys
-        평가할 embedding obsm 키 리스트
+        List of embedding obsm keys to evaluate
     batch_key
-        batch 정보가 있는 obs 컬럼명
+        obs column name containing batch information
     label_key
-        cell type 라벨이 있는 obs 컬럼명
+        obs column name containing cell-type labels
     trim_rate
-        trimmed mean 계산시 양쪽에서 제거할 비율 (기본값: 0.05)
+        Fraction to trim from each side for trimmed mean (default: 0.05)
     thres_batch
-        최소 batch 크기 (이보다 작은 batch는 제외)
+        Minimum batch size (batches smaller than this are excluded)
     thres_celltype
-        최소 cell type 크기 (이보다 작은 cell type은 제외)
+        Minimum cell-type size (cell types smaller than this are excluded)
     
     Examples
     --------
@@ -72,9 +72,9 @@ class ScGraphWrapper:
         self.thres_batch = thres_batch
         self.thres_celltype = thres_celltype
         
-        # 제외할 cell types
+        # Cell types to exclude
         self._ignore_celltypes: list[str] = []
-        # batch별 consensus distance
+        # Per-batch consensus distances
         self._collect_pca: dict[str, pd.DataFrame] = {}
         # consensus distance matrix
         self._consensus_df: pd.DataFrame | None = None
@@ -83,7 +83,7 @@ class ScGraphWrapper:
         self._results: pd.DataFrame | None = None
     
     def _preprocess(self) -> None:
-        """cell type 필터링 (너무 작은 cell type 제외)"""
+        """Filter out cell types that are too small."""
         celltype_counts = self.adata.obs[self.label_key].value_counts()
         for celltype, count in celltype_counts.items():
             if count < self.thres_celltype:
@@ -96,7 +96,7 @@ class ScGraphWrapper:
         labels: pd.Series,
         trim_proportion: float = 0.05,
     ) -> pd.DataFrame:
-        """각 cell type별 trimmed mean centroid 계산
+        """Calculate trimmed mean centroid for each cell type.
         
         Parameters
         ----------
@@ -105,7 +105,7 @@ class ScGraphWrapper:
         labels
             cell type labels
         trim_proportion
-            양쪽에서 제거할 비율
+            Fraction to trim from each side
         
         Returns
         -------
@@ -127,7 +127,7 @@ class ScGraphWrapper:
         return pd.DataFrame(centroids).T
     
     def _compute_pairwise_distances(self, centroids: pd.DataFrame) -> pd.DataFrame:
-        """cell type 간 pairwise distance 계산
+        """Calculate pairwise distances between cell types.
         
         Parameters
         ----------
@@ -146,10 +146,10 @@ class ScGraphWrapper:
         )
     
     def _process_batches(self) -> None:
-        """각 batch별로 centroid 및 pairwise distance 계산"""
+        """Calculate centroids and pairwise distances for each batch."""
         print("Processing batches: calculating centroids and pairwise distances...")
         
-        # PCA 기반 consensus 계산
+        # PCA-based consensus calculation
         import scanpy as sc
         
         for batch in tqdm(self.adata.obs[self.batch_key].unique()):
@@ -159,7 +159,7 @@ class ScGraphWrapper:
                 print(f"Skipped batch '{batch}': < {self.thres_batch} cells")
                 continue
             
-            # HVG + PCA 계산
+            # HVG + PCA computation
             try:
                 sc.pp.highly_variable_genes(adata_batch, n_top_genes=min(1000, adata_batch.n_vars))
                 sc.pp.pca(adata_batch, n_comps=min(10, adata_batch.n_obs - 1), use_highly_variable=True)
@@ -167,7 +167,7 @@ class ScGraphWrapper:
                 print(f"Skipped batch '{batch}': PCA failed ({e})")
                 continue
             
-            # Centroid 및 distance 계산
+            # Centroid and distance calculation
             centroids = self._calculate_trimmed_means(
                 adata_batch.obsm["X_pca"],
                 adata_batch.obs[self.label_key],
@@ -183,22 +183,22 @@ class ScGraphWrapper:
             self._collect_pca[batch] = normalized
     
     def _calculate_consensus(self) -> None:
-        """batch별 distance를 평균하여 consensus distance matrix 생성"""
+        """Average per-batch distances to create consensus distance matrix."""
         if not self._collect_pca:
             raise ValueError("No batches processed. Run _process_batches first.")
         
-        # 모든 batch의 distance matrix 병합
+        # Merge distance matrices from all batches
         df_combined = pd.concat(self._collect_pca.values(), axis=0, sort=False)
-        # 동일 index끼리 평균
+        # Average over identical indices
         consensus = df_combined.groupby(df_combined.index).mean()
-        # 대칭 행렬로 정리
+        # Ensure symmetric matrix
         common_labels = consensus.index.intersection(consensus.columns)
         consensus = consensus.loc[common_labels, common_labels]
         # Normalize by max
         self._consensus_df = consensus / consensus.max(axis=0)
     
     def prepare(self) -> "ScGraphWrapper":
-        """전처리 및 consensus distance 계산
+        """Preprocess and compute consensus distances.
         
         Returns
         -------
@@ -211,28 +211,28 @@ class ScGraphWrapper:
         return self
     
     def _evaluate_embedding(self, obsm_key: str) -> dict[str, float]:
-        """단일 embedding 평가
+        """Evaluate a single embedding.
         
         Parameters
         ----------
         obsm_key
-            embedding obsm 키
+            Embedding obsm key
         
         Returns
         -------
-        메트릭 dict: {'Rank-PCA': ..., 'Corr-PCA': ..., 'Corr-Weighted': ...}
+        Metric dict: {'Rank-PCA': ..., 'Corr-PCA': ..., 'Corr-Weighted': ...}
         """
         if self._consensus_df is None:
             raise ValueError("Consensus not calculated. Run prepare() first.")
         
-        # Embedding centroid 및 distance 계산
+        # Calculate embedding centroid and distances
         centroids = self._calculate_trimmed_means(
             np.array(self.adata.obsm[obsm_key]),
             self.adata.obs[self.label_key],
             trim_proportion=self.trim_rate,
         )
         
-        # Consensus와 공통 cell type만 사용
+        # Use only cell types common to consensus
         common_labels = centroids.index.intersection(self._consensus_df.index)
         if len(common_labels) < 2:
             return {'Rank-PCA': np.nan, 'Corr-PCA': np.nan, 'Corr-Weighted': np.nan}
@@ -244,7 +244,7 @@ class ScGraphWrapper:
         pairwise_dist = pairwise_dist.loc[common_labels, common_labels]
         normalized = pairwise_dist.div(pairwise_dist.max(axis=0), axis=1)
         
-        # 메트릭 계산
+        # Calculate metrics
         rank_corr = self._rank_diff(normalized, consensus)
         corr_pca = self._corr_diff(normalized, consensus)
         corr_weighted = self._corrw_diff(normalized, consensus)
@@ -257,7 +257,7 @@ class ScGraphWrapper:
     
     @staticmethod
     def _rank_diff(df1: pd.DataFrame, df2: pd.DataFrame) -> float:
-        """Spearman correlation (순위 기반)"""
+        """Spearman correlation (rank-based)."""
         correlations = []
         for col in df1.columns:
             if col in df2.columns:
@@ -281,7 +281,7 @@ class ScGraphWrapper:
     
     @staticmethod
     def _weighted_pearson(x: np.ndarray, y: np.ndarray, distances: np.ndarray) -> float:
-        """가중 Pearson correlation"""
+        """Weighted Pearson correlation."""
         with np.errstate(divide='ignore', invalid='ignore'):
             weights = 1 / distances
             weights[distances == 0] = 0
@@ -304,7 +304,7 @@ class ScGraphWrapper:
         return covariance / np.sqrt(variance_x * variance_y)
     
     def _corrw_diff(self, df1: pd.DataFrame, df2: pd.DataFrame) -> float:
-        """가중 Pearson correlation"""
+        """Weighted Pearson correlation."""
         correlations = []
         for col in df1.columns:
             if col in df2.columns:
@@ -319,11 +319,11 @@ class ScGraphWrapper:
         return np.nanmean(correlations) if correlations else np.nan
     
     def run(self) -> pd.DataFrame:
-        """모든 embedding 평가 실행
+        """Run evaluation on all embeddings.
         
         Returns
         -------
-        결과 DataFrame (embedding x metrics)
+        Results DataFrame (embedding x metrics)
         """
         if not self._prepared:
             self.prepare()
@@ -337,7 +337,7 @@ class ScGraphWrapper:
         return self._results
     
     def get_results(self) -> pd.DataFrame:
-        """결과 DataFrame 반환"""
+        """Return results DataFrame."""
         if self._results is None:
             return self.run()
         return self._results

@@ -11,41 +11,39 @@ from ..logger import GPUMonitor, TimeLogger
 
 
 def inference_loop_per_worker(inference_loop_config):
-    """
-    Ray TorchTrainer에서 각 워커(=GPU 1장)마다 실행되는 추론 루프.
+    """Inference loop executed per worker (= 1 GPU) by Ray TorchTrainer.
 
-    기대 입력(inference_loop_config):
-      - "config": Dict (name, save_path, inference{batch_size,num_workers}, accelerate{...} 등)
-      - "adata_ref": ray.ObjectRef (필수)
+    Expected inputs (inference_loop_config):
+      - "cfg": Dict (name, save_path, inference{batch_size, num_workers}, accelerate{...}, etc.)
+      - "adata_ref": ray.ObjectRef (required)
       - "save_key": str
-      - "inferencer_class": picklable 클래스 (BaseInferencer 구현체)
+      - "inferencer_class": picklable class (BaseInferencer implementation)
 
-    출력/동작:
-      - DDP+Accelerate 표준에 맞춰 분산 추론
-      - main process만 .npy(+ .json) 저장
-      - 모든 워커에서 ray_train.report(...) 1회 호출
+    Behavior:
+      - Runs distributed inference following DDP + Accelerate conventions.
+      - Only the main process saves .npy (+ .json sidecar).
+      - Every worker calls ray_train.report(...) once.
     """
     # --------- Config / Inputs ---------
     cfg = inference_loop_config.get("cfg")
-    
+
     import random
     import numpy as np
-    
+
     seed = cfg.get("inference", {}).get("seed", 0)
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
-        # Set deterministic behavior for CUDA operations
         torch.backends.cudnn.deterministic = True
         torch.backends.cudnn.benchmark = False
-    
-    # Set Worker GPU for DDP
+
+    # Set worker GPU for DDP
     if torch.cuda.is_available():
         local_rank = int(os.environ.get("LOCAL_RANK", "0"))
         torch.cuda.set_device(local_rank)
-    
+
     progress = inference_loop_config.get("progress_actor")
     adata = ray.get(cfg.get("adata_ref"))
     save_key = cfg.save_key
@@ -54,7 +52,8 @@ def inference_loop_per_worker(inference_loop_config):
     timer = TimeLogger()
     timer.start("total")
     t_load_d = float(getattr(cfg, "t_load_d", 0.0))
-    # --------- Get Inferencer from model name -------
+
+    # --------- Resolve Inferencer from model name -------
     InferCls = resolve_inferencer(cfg)
 
     # --------- Accelerator / Device ---------
@@ -93,27 +92,28 @@ def inference_loop_per_worker(inference_loop_config):
     with torch.no_grad(), accelerator.autocast():
         for idx, batch in enumerate(dl):
             emb, cid = infer.forward_step(model, batch)  # emb:(B,D), cid:(B,)
-            gemb = accelerator.gather_for_metrics(emb)  # (B*, D)
-            gcid = accelerator.gather_for_metrics(cid)  # (B*,)
+            gemb = accelerator.gather_for_metrics(emb)    # (B*, D)
+            gcid = accelerator.gather_for_metrics(cid)    # (B*,)
             emb_chunks.append(gemb.detach().cpu())
             cid_chunks.append(gcid.detach().cpu())
             progress.update.remote(task_name, accelerator.process_index, actual_gpu_id, idx + 1, total_batches, bs)
 
     accelerator.wait_for_everyone()
     ray.get(progress.finish.remote(cfg.get("task_name"), local_rank))
-    # Logger Finish
+
+    # Logger finish
     t_infer = timer.stop("infer")
     util_mean, util_max, mem_max = monitor.stop()
     if util_mean is None:
         util_mean = util_max = mem_max = 0
 
-    # Save on main process
+    # Save on main process only
     n_obs = n_dim = 0
     t_total = timer.stop("total")
     if accelerator.is_main_process:
-        E = torch.cat(emb_chunks, dim=0)  # (N, D)
+        E = torch.cat(emb_chunks, dim=0)   # (N, D)
         I = torch.cat(cid_chunks, dim=0).long()  # (N,)
-        order = torch.argsort(I, stable=True)  # 전역 원순서 복원
+        order = torch.argsort(I, stable=True)     # Restore global original order
         E = E[order]
         arr = E.float().numpy()
         n_obs, n_dim = int(arr.shape[0]), int(arr.shape[1])

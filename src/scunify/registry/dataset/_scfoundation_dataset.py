@@ -1,6 +1,6 @@
 """
-ScFoundation Dataset - 원논문 get_embedding.py를 정확히 따라 구현
-Foundations/scFoundation/model/get_embedding.py Line 140-190 참조
+ScFoundation Dataset - faithfully following the original get_embedding.py
+Reference: Foundations/scFoundation/model/get_embedding.py lines 140-190
 """
 
 import numpy as np
@@ -12,12 +12,12 @@ from torch.utils.data import Dataset
 
 class ScFoundationDataset(Dataset):
     """
-    Foundations get_embedding.py의 cell embedding 생성 로직을 정확히 재현.
+    Faithfully reproduces the cell embedding generation logic from Foundations get_embedding.py.
     
-    주요 특징:
-    - batch_size=1만 지원 (원논문과 동일)
-    - 원논문의 Line 140-190 로직 그대로 구현
-    - main_gene_selection 로직 포함 (19264 genes로 변환)
+    Key features:
+    - Only batch_size=1 is supported (same as the original paper)
+    - Implements lines 140-190 from the original paper exactly
+    - Includes main_gene_selection logic (mapping to 19264 genes)
     """
     
     def __init__(self, adata, config):
@@ -25,15 +25,15 @@ class ScFoundationDataset(Dataset):
         self.pad_token_id = config.model_param[config.inference["version"]]["mae_autobin"]["pad_token_id"]
         self.collator = None
         self.sampler = None
-        # batch_size=1 강제 (원논문과 동일)
+        # Force batch_size=1 (same as original paper)
         if config.inference.get("batch_size", 1) != 1:
             raise ValueError("ScFoundationDataset only supports batch_size=1 (same as original paper)")
         
-        # Gene list 로드
+        # Load gene list
         gene_list_df = pd.read_csv(config.resources["gene_list"], sep='\t', header=0)
         self.gene_list = list(gene_list_df['gene_name'])
         
-        # 원본 데이터를 pandas DataFrame으로 변환
+        # Convert original data to pandas DataFrame
         idx = adata.obs_names.tolist()
         try:
             col = adata.var.gene_name.tolist()
@@ -48,11 +48,11 @@ class ScFoundationDataset(Dataset):
         self.gexpr_feature = pd.DataFrame(gexpr_feature, index=idx, columns=col)
         self.N = self.gexpr_feature.shape[0]
         
-        # Lazy loading: gene selection을 __getitem__에서 수행 (메모리 효율적)
+        # Lazy loading: gene selection performed per cell in __getitem__ (memory-efficient)
         print(f'Lazy loading enabled: gene selection will be done per cell')
         print(f'Original gene count: {self.gexpr_feature.shape[1]} → will convert to 19264 in __getitem__')
         
-        # 전처리 옵션
+        # Preprocessing option
         self.pre_normalized = config.preprocessing.get("option", "F")  # 'F', 'T', 'A'
         
         # tgthighres
@@ -65,8 +65,8 @@ class ScFoundationDataset(Dataset):
     
     def _main_gene_selection(self, X_df, gene_list):
         """
-        원논문 main_gene_selection 함수 재현.
-        19264 genes로 변환, 없는 gene은 0으로 padding.
+        Reproduces the main_gene_selection function from the original paper.
+        Maps to 19264 genes; missing genes are zero-padded.
         """
         to_fill_columns = list(set(gene_list) - set(X_df.columns))
         
@@ -82,7 +82,7 @@ class ScFoundationDataset(Dataset):
                 columns=list(X_df.columns) + list(padding_df.columns)
             )
         
-        # gene_list 순서로 재배치
+        # Reorder columns to gene_list order
         X_df = X_df[gene_list]
         return X_df
     
@@ -90,16 +90,16 @@ class ScFoundationDataset(Dataset):
         return self.N
     
     def __getitem__(self, idx):
-        # Lazy gene selection: 해당 cell만 19264 genes로 변환
+        # Lazy gene selection: map only this cell to 19264 genes
         cell_data = self.gexpr_feature.iloc[idx:idx+1, :]  # (1, M)
         
         if cell_data.shape[1] < 19264:
             cell_data = self._main_gene_selection(cell_data, self.gene_list)
         
-        # 1D Series로 변환 (이후 로직에 맞추기)
+        # Convert to 1D Series for downstream logic
         cell_series = cell_data.iloc[0, :]
         
-        # Pre-normalization (원논문 Line 159-165)
+        # Pre-normalization (original paper lines 159-165)
         if self.pre_normalized == 'F':
             # normalize_total=10000 + log1p
             cell_sum = cell_series.sum()
@@ -115,13 +115,13 @@ class ScFoundationDataset(Dataset):
         else:
             raise ValueError(f'pre_normalized must be T, F or A, got {self.pre_normalized}')
         
-        # Totalcount (원논문 Line 167-170)
+        # Total count (original paper lines 167-170)
         if self.pre_normalized == 'A':
             totalcount = cell_series.iloc[-1]
         else:
             totalcount = cell_series.sum()
         
-        # Resolution token (원논문 Line 172-179)
+        # Resolution token (original paper lines 172-179)
         if self.tg_mode == 'f':
             resolution = np.log10(totalcount * self.tg_val)
         elif self.tg_mode == 'a':
@@ -133,23 +133,23 @@ class ScFoundationDataset(Dataset):
         
         logtc = np.log10(totalcount) if totalcount > 0 else -np.inf
         
-        # pretrain_gene_x: [19264 genes, resolution, logtc] (원논문 Line 173-179)
+        # pretrain_gene_x: [19264 genes, resolution, logtc] (original paper lines 173-179)
         pretrain_gene_x = torch.tensor(
             tmpdata + [resolution, logtc],
             dtype=torch.float32
         ).unsqueeze(0)  # (1, 19266)
         
-        # data_gene_ids: [0, 1, 2, ..., 19265] (원논문 Line 180)
+        # data_gene_ids: [0, 1, 2, ..., 19265] (original paper line 180)
         data_gene_ids = torch.arange(19266, dtype=torch.long).unsqueeze(0)  # (1, 19266)
         
-        # value_labels: mask for non-zero values (원논문 Line 182)
+        # value_labels: mask for non-zero values (original paper line 182)
         value_labels = (pretrain_gene_x > 0).float()  # (1, 19266)
         
-        # gatherData 적용 (원논문 Line 183)
+        # Apply gatherData (original paper line 183)
         x, x_padding = self._gatherData(pretrain_gene_x, value_labels, self.pad_token_id)
         position_gene_ids, _ = self._gatherData(data_gene_ids, value_labels, self.pad_token_id)
         
-        # 반환: (values, padding_mask, position_ids, cell_id)
+        # Return: (values, padding_mask, position_ids, cell_id)
         return (
             x.squeeze(0),  # (K,)
             x_padding.squeeze(0),  # (K,) bool
@@ -159,7 +159,7 @@ class ScFoundationDataset(Dataset):
     
     def _gatherData(self, data, labels, pad_token_id):
         """
-        원논문 load.py의 gatherData 함수 재현.
+        Reproduces the gatherData function from the original load.py.
         
         data: (1, F) tensor
         labels: (1, F) binary mask
@@ -169,20 +169,20 @@ class ScFoundationDataset(Dataset):
         - gathered_data: (1, K) where K = max(labels.sum())
         - padding_labels: (1, K) bool mask
         """
-        # labels.sum(1)의 최대값
+        # Max of labels.sum(1)
         max_num = int(labels.sum(1).max().item())
         
-        # Padding 추가
+        # Add padding
         fake_data = torch.full((data.shape[0], max_num), pad_token_id, dtype=data.dtype)
         data_padded = torch.cat([data, fake_data], dim=1)
         
-        # Labels에 우선순위 부여 (원논문 로직)
+        # Assign priority to labels (original paper logic)
         fake_label = torch.ones((labels.shape[0], max_num), dtype=labels.dtype)
         none_labels = (labels == 0)
         labels_copy = labels.clone().float()
         labels_copy[none_labels] = -float('inf')
         
-        # 위치 기반 우선순위 추가
+        # Add position-based priority
         F = labels.shape[1]
         tmp_data = torch.tensor(
             [(i + 1) * 20000 for i in range(F, 0, -1)],
@@ -191,7 +191,7 @@ class ScFoundationDataset(Dataset):
         labels_copy = labels_copy + tmp_data
         labels_padded = torch.cat([labels_copy, fake_label], dim=1)
         
-        # Top-K 선택
+        # Top-K selection
         topk_indices = labels_padded.topk(max_num, dim=1).indices
         
         # Gather

@@ -40,8 +40,8 @@ def __getattr__(name):
 
 def resolve_inferencer(cfg) -> Type:
     """
-    cfg.model_name 기준으로 inferencer 클래스를 반환.
-    Lazy import로 필요할 때만 로드.
+    Return the inferencer class based on cfg.model_name.
+    Uses lazy import to load only when needed.
     """
     model_name = cfg.get("model_name")
     if not model_name:

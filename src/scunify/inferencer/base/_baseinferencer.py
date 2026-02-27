@@ -44,7 +44,7 @@ class BaseInferencer(ABC):
             import numpy as np
             import torch
             
-            # 모든 worker가 config의 global seed 사용
+            # All workers use the global seed from config
             seed = inf.get("seed", 0)
             np.random.seed(seed)
             random.seed(seed)
@@ -65,7 +65,7 @@ class BaseInferencer(ABC):
 
     # ----- Output handling -----
     def postprocess(self, gathered_outputs: Iterable[torch.Tensor]) -> np.ndarray | None:
-        """워커별 모인 텐서들을 병합해 numpy로 반환."""
+        """Merge gathered tensors from all workers and return as numpy."""
         outs = [t.detach().cpu() for t in gathered_outputs if t is not None]
         if not outs:
             return None
@@ -73,7 +73,7 @@ class BaseInferencer(ABC):
         return Y
 
     def save_outputs(self, outputs: np.ndarray, out_path: str, meta: dict[str, Any]) -> None:
-        """결과 저장: .npy + .json(sidecar)."""
+        """Save results: .npy + .json (sidecar metadata)."""
         p = Path(out_path)
         p.parent.mkdir(parents=True, exist_ok=True)
         np.save(str(p), outputs.astype(np.float32), allow_pickle=False)

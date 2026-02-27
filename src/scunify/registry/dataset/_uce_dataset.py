@@ -41,7 +41,7 @@ class UCEDataset(Dataset):
         return self.num_cells
 
     def __getitem__(self, idx: int):
-        # 3) counts 한 행 읽기 → 가중치(log1p) → 시퀀스 샘플링
+        # 3) Read one row of counts -> weights (log1p) -> sequence sampling
         counts_row = _row_from_X(self.X, idx).astype(np.float32)
         counts = torch.from_numpy(counts_row).unsqueeze(0)  # (1, G)
         weights = torch.log1p(counts)
@@ -57,7 +57,7 @@ class UCEDataset(Dataset):
             dataset_to_chroms=self.dataset_to_chroms,
             dataset_to_starts=self.dataset_to_starts,
         )
-        # 원본 반환 형태 유지 + cell_id 추가
+        # Maintain original return format + add cell_id
         return batch_sentences, mask, idx, seq_len, cell_sentences
 
 
@@ -193,17 +193,17 @@ import scanpy as sc
 
 
 def preproc(adata, cfgs):
-    # 1) UCE와 동일한 순서로 필터 (genes -> cells)
+    # 1) Filter in same order as UCE (genes -> cells)
     if cfgs.preprocessing["filter"]:
         sc.pp.filter_genes(adata, min_cells=cfgs.preprocessing["filter_genes"])
         sc.pp.filter_cells(adata, min_genes=cfgs.preprocessing["filter_cells"])
 
-    # 2) UCE 방식으로 임베딩 유전자 서브셋 (반드시 이 함수 사용)
+    # 2) Subset embedding genes using UCE method (must use this function)
     adata = _preproc_raw_adata(adata, cfgs)
-    # 3) HVG는 사용하지 않음 (UCE 기본값)
-    #    => hv_genes=None 유지
+    # 3) HVG is not used (UCE default)
+    #    => keep hv_genes=None
 
-    # 4) 인덱스 생성(아래 함수는 UCE 원본 로직과 동일)
+    # 4) Create indices (function below follows original UCE logic)
 
     species_to_pe = {
         specie: torch.load(cfgs.resources["protein_embeddings"][specie]) for specie in [cfgs.preprocessing["species"]]
@@ -217,7 +217,7 @@ def preproc(adata, cfgs):
         gene_to_chrom_pos["species"] + "_" + gene_to_chrom_pos["chromosome"]
     )
 
-    spec_pe_genes = list(species_to_pe[cfgs.preprocessing["species"]].keys())  # UCE와 동일
+    spec_pe_genes = list(species_to_pe[cfgs.preprocessing["species"]].keys())  # Same as UCE
     offset = species_to_offsets[cfgs.preprocessing["species"]]
 
     pe_row_idxs, dataset_chroms, dataset_pos = adata_path_to_prot_chrom_starts(

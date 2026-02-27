@@ -1,5 +1,5 @@
 # scUnify Evaluation Module
-# scib + scgraph 통합 embedding 평가 프레임워크
+# Integrated embedding evaluation framework (scIB + scGraph)
 
 from ._benchmarker import Evaluator
 from ._scib import ScibWrapper

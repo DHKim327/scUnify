@@ -1,4 +1,4 @@
-# Lazy imports - 필요할 때만 로드
+# Lazy imports - loaded only when needed
 __all__ = ["ScFoundationDataset", "ScGPTDataset", "UCEDataset"]
 
 _IMPORTED = {}

@@ -99,7 +99,7 @@ def remove_model_prefix(state_dict):
     new_state_dict = {}
     for k, v in state_dict.items():
         if k.startswith("model."):
-            new_key = k[len("model.") :]  # "model." 제거
+            new_key = k[len("model.") :]  # Strip "model." prefix
         else:
             new_key = k
         new_state_dict[new_key] = v

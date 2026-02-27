@@ -1,14 +1,14 @@
 # core/data_actor.py
-"""
-모델별 DataLoader Actor
+"""Per-model DataLoader Actor.
 
-각 모델 환경(scunify_scgpt, scunify_uce, scunify_scfoundation)에서 실행되는
-Stateful Actor로, 같은 환경의 Worker들이 데이터를 zero-copy로 공유할 수 있게 함.
+A stateful Ray actor that runs within each model's conda environment
+(scunify_scgpt, scunify_uce, scunify_scfoundation), enabling workers in the
+same environment to share data via zero-copy reads from the Object Store.
 
-주요 특징:
-  - 같은 경로의 데이터는 한 번만 로드
-  - 같은 환경 내에서 직렬화 호환 보장
-  - Object Store를 통한 zero-copy 공유
+Key features:
+  - Each data path is loaded only once.
+  - Serialization compatibility is guaranteed within the same env.
+  - Data is shared via Ray Object Store (zero-copy).
 """
 
 import ray
@@ -16,88 +16,81 @@ import ray
 
 @ray.remote
 class DataLoaderActor:
-    """
-    특정 모델 환경에서 실행되는 데이터 로더 Actor
-    
-    Usage:
-        # 모델별 Actor 생성 (특정 conda 환경에서 실행)
+    """Data loader actor running within a specific model environment.
+
+    Usage::
+
+        # Create a per-model actor in the target conda env
         actor = DataLoaderActor.options(
             runtime_env={"conda": "scunify_scgpt"}
         ).remote()
-        
-        # 데이터 로드 요청
+
+        # Request data load
         adata_ref = ray.get(actor.get_or_load.remote("/path/to/data.h5ad"))
-        
-        # Worker에서 데이터 사용
+
+        # Use data in a worker
         adata = ray.get(adata_ref)
     """
-    
+
     def __init__(self):
         import os
-        # matplotlib backend 설정 (Jupyter inline backend 충돌 방지)
-        # Actor 시작 시 즉시 설정해야 함
+        # Set matplotlib backend to avoid Jupyter inline backend conflicts
         os.environ["MPLBACKEND"] = "Agg"
-        
+
         self.cache = {}  # {path: ObjectRef}
-        self._loaded_paths = []  # 로딩 순서 기록
-    
+        self._loaded_paths = []  # Load order tracking
+
     def get_or_load(self, path: str):
-        """
-        경로에서 AnnData를 로드하고 Object Store에 저장
-        
+        """Load AnnData from path and store in the Object Store.
+
         Args:
-            path: h5ad 파일 경로
-            
+            path: Path to an h5ad file.
+
         Returns:
-            ray.ObjectRef: Object Store에 저장된 AnnData의 참조
+            ray.ObjectRef: Reference to the AnnData in the Object Store.
         """
         import os
-        # matplotlib backend 설정 (Jupyter inline backend 충돌 방지)
         os.environ["MPLBACKEND"] = "Agg"
         import matplotlib
         matplotlib.use("Agg")
-        
+
         import numpy as np
         import scanpy as sc
         import scipy.sparse as sp
-        
+
         if path not in self.cache:
-            # 새로운 데이터 로드
             adata = sc.read_h5ad(path)
-            
-            # float32 변환 (메모리 효율 + 모델 호환성)
+
+            # Convert to float32 for memory efficiency and model compatibility
             if sp.issparse(adata.X):
                 adata.X = adata.X.astype(np.float32)
             else:
                 adata.X = np.asarray(adata.X, dtype=np.float32, order="C")
-            
-            # Object Store에 저장
+
             self.cache[path] = ray.put(adata)
             self._loaded_paths.append(path)
-        
+
         return self.cache[path]
-    
+
     def preload(self, paths: list[str]):
-        """
-        여러 경로를 미리 로드
-        
+        """Preload multiple data paths.
+
         Args:
-            paths: h5ad 파일 경로 리스트
-            
+            paths: List of h5ad file paths.
+
         Returns:
-            dict: {path: ObjectRef} 매핑
+            dict: {path: ObjectRef} mapping.
         """
         result = {}
         for path in paths:
             result[path] = self.get_or_load(path)
         return result
-    
+
     def clear_cache(self, path: str = None):
-        """
-        캐시 정리
-        
+        """Clear cached data.
+
         Args:
-            path: 특정 경로만 정리 (None이면 전체)
+            path: Specific path to clear. If None, clears all.
         """
         if path:
             self.cache.pop(path, None)
@@ -106,46 +99,40 @@ class DataLoaderActor:
         else:
             self.cache.clear()
             self._loaded_paths.clear()
-    
+
     def get_cache_info(self) -> dict:
-        """
-        캐시 상태 정보 반환
-        """
+        """Return cache status information."""
         return {
             "n_cached": len(self.cache),
             "paths": list(self.cache.keys()),
             "load_order": self._loaded_paths.copy(),
         }
-    
+
     def is_cached(self, path: str) -> bool:
-        """
-        특정 경로가 캐시되어 있는지 확인
-        """
+        """Check whether a specific path is cached."""
         return path in self.cache
 
 
 def create_model_actors(model_names: list[str]) -> dict:
-    """
-    모델별 DataLoader Actor 생성
-    
+    """Create per-model DataLoader actors.
+
     Args:
-        model_names: 모델 이름 리스트 (예: ["scGPT", "UCE", "scFoundation"])
-        
+        model_names: List of model names (e.g., ["scGPT", "UCE", "scFoundation"]).
+
     Returns:
-        dict: {model_name: DataLoaderActor} 매핑
+        dict: {model_name: DataLoaderActor} mapping.
     """
     actors = {}
-    
+
     for model_name in model_names:
         env_name = f"scunify_{model_name.lower()}"
-        
-        # 모델 환경에서 실행되는 Actor 생성
+
         actor = DataLoaderActor.options(
             runtime_env={"conda": env_name},
             name=f"data_loader_{model_name.lower()}",
-            lifetime="detached",  # Runner 종료 후에도 유지 가능
+            lifetime="detached",  # Persists after runner shutdown
         ).remote()
-        
+
         actors[model_name] = actor
-    
+
     return actors

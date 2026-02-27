@@ -1,6 +1,6 @@
 """
-scib 스타일 통합 플로팅 (3-level column header)
-scib + scgraph 메트릭을 하나의 테이블로 표시
+Unified plotting in scIB style (3-level column header)
+Display scIB + scGraph metrics in a single table
 
 Reference: scib-metrics/src/scib_metrics/benchmark/_core.py (plot_results_table)
 """
@@ -19,8 +19,8 @@ if TYPE_CHECKING:
     from plottable import Table
 
 
-# 3-Level Column Structure 정의
-# (원래 컬럼명): (Level1: Source, Level2: Category, Level3: 표시명)
+# 3-level column structure definition
+# (original col name): (Level1: Source, Level2: Category, Level3: display name)
 COLUMN_STRUCTURE = {
     # SCIB - Bio conservation
     'Isolated labels': ('SCIB', 'Bio conservation', 'Iso'),
@@ -49,7 +49,7 @@ COLUMN_STRUCTURE = {
     'Corr-Weighted': ('scGraph', 'Corr-W', ''),
 }
 
-# 컬럼 순서 정의
+# Column order definition
 COLUMN_ORDER = [
     # Bio conservation
     'Isolated labels', 'Leiden NMI', 'Leiden ARI', 'KMeans NMI', 'KMeans ARI', 
@@ -70,58 +70,58 @@ def plot_combined_table(
     show: bool = True,
     figsize: tuple[float, float] | None = None,
 ) -> "Table":
-    """scib + scgraph 통합 결과 플로팅 (3-level column header)
+    """Plot combined scIB + scGraph results (3-level column header).
     
     Parameters
     ----------
     df
-        통합 결과 DataFrame (embeddings x metrics)
-        - 행: embedding 이름 (X_scgpt, X_uce, ...)
-        - 열: 메트릭 이름
+        Combined results DataFrame (embeddings x metrics)
+        - rows: embedding names (X_scgpt, X_uce, ...)
+        - columns: metric names
     save_dir
-        저장 디렉토리 (None이면 저장 안함)
+        Save directory (None to skip saving)
     min_max_scale
-        결과를 0-1로 스케일링할지 여부
+        Whether to scale results to 0-1
     show
-        플롯을 화면에 표시할지 여부
+        Whether to display the plot on screen
     figsize
-        figure 크기 (None이면 자동 계산)
+        Figure size (None for auto calculation)
     
     Returns
     -------
-    plottable.Table 객체
+    plottable.Table object
     """
     from plottable import ColumnDefinition, Table
     from plottable.cmap import normed_cmap
     from plottable.plots import bar
     from sklearn.preprocessing import MinMaxScaler
     
-    # 복사본으로 작업
+    # Work on a copy
     plot_df = df.copy()
     
-    # Min-max 스케일링
+    # Min-max scaling
     if min_max_scale:
         numeric_cols = plot_df.select_dtypes(include=[np.number]).columns
         plot_df[numeric_cols] = MinMaxScaler().fit_transform(plot_df[numeric_cols])
     
-    # 컬럼 순서 정렬 (존재하는 컬럼만)
+    # Sort columns by defined order (existing only)
     ordered_cols = [c for c in COLUMN_ORDER if c in plot_df.columns]
     remaining_cols = [c for c in plot_df.columns if c not in ordered_cols]
     plot_df = plot_df[ordered_cols + remaining_cols]
     
-    # Total 기준 정렬
+    # Sort by Total
     if 'Total' in plot_df.columns:
         plot_df = plot_df.sort_values(by='Total', ascending=False)
     
-    # Method 컬럼 추가 (인덱스를 첫 번째 컬럼으로)
+    # Add Method column (index as first column)
     plot_df = plot_df.reset_index()
     plot_df = plot_df.rename(columns={plot_df.columns[0]: 'Method'})
     
-    # Colormap 함수
+    # Colormap function
     def cmap_fn(col_data):
         return normed_cmap(col_data.astype(float), cmap=mpl.cm.PRGn, num_stds=2.5)
     
-    # 컬럼 정의 생성
+    # Generate column definitions
     column_definitions = [
         ColumnDefinition(
             "Method",
@@ -130,27 +130,27 @@ def plot_combined_table(
         ),
     ]
     
-    # 메트릭 컬럼 추가
+    # Add metric columns
     prev_group = None
     for col in plot_df.columns:
         if col == 'Method':
             continue
         
-        # 3-level 구조에서 그룹(Level2) 가져오기
+        # Get group (Level2) from 3-level structure
         structure = COLUMN_STRUCTURE.get(col, ('Unknown', col, col))
         source, category, display_name = structure
         
-        # 그룹 이름 (Level1\nLevel2 또는 Level1만)
+        # Group name (Level1\nLevel2 or Level1 only)
         if display_name:
             group = f"{source}\n{category}"
             title = display_name
         else:
             group = source
-            title = category  # scGraph의 경우 category가 표시명
+            title = category  # For scGraph, category is the display name
         
-        # Aggregate score 컬럼은 막대 그래프
+        # Aggregate score columns use bar chart
         if category == 'Aggregate score':
-            # 첫 번째 aggregate score 컬럼에만 왼쪽 테두리
+            # Left border only for the first aggregate score column
             border = "left" if prev_group != group else None
             
             column_definitions.append(
@@ -170,7 +170,7 @@ def plot_combined_table(
                     border=border,
                 )
             )
-        # scGraph 컬럼
+        # scGraph columns
         elif source == 'scGraph':
             column_definitions.append(
                 ColumnDefinition(
@@ -189,7 +189,7 @@ def plot_combined_table(
                     border="left" if prev_group != group else None,
                 )
             )
-        # 일반 메트릭 컬럼 (원형 셀)
+        # Regular metric columns (circle cells)
         else:
             column_definitions.append(
                 ColumnDefinition(
@@ -209,17 +209,17 @@ def plot_combined_table(
         
         prev_group = group
     
-    # Figure 크기 계산
+    # Calculate figure size
     if figsize is None:
         num_embeds = len(plot_df)
         num_cols = len(plot_df.columns)
         figsize = (max(15, num_cols * 0.8), 2.5 + 0.5 * num_embeds)
     
-    # 플로팅
+    # Plotting
     with mpl.rc_context({"svg.fonttype": "none"}):
         fig, ax = plt.subplots(figsize=figsize)
         
-        # 숫자 컬럼만 float으로 변환
+        # Convert numeric columns to float
         for col in plot_df.columns:
             if col != 'Method':
                 plot_df[col] = plot_df[col].astype(float)

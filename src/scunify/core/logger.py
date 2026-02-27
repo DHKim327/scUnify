@@ -9,12 +9,12 @@ class ProgressActor:
         # key: (task_name, rank)
         self.rows: dict[tuple[str, int], dict] = {}
 
-    # 새로 추가: 사전 등록
+    # Pre-register a task/rank entry
     def register(self, task_name: str, rank: int, total: int | None, batch_size: int | None):
         self.rows[(task_name, rank)] = dict(
             task=task_name,
             rank=rank,
-            gpu="-",  # 아직 배정 전
+            gpu="-",  # Not yet assigned
             batch_size=batch_size if batch_size is not None else "-",
             done=0,
             total=(total if total is not None else 0),
@@ -22,14 +22,14 @@ class ProgressActor:
             ts=time.time(),
         )
 
-    # 상태만 바꾸는 헬퍼 (옵션)
+    # Helper to update status only (optional)
     def set_status(self, task_name: str, rank: int, status: str):
         r = self.rows.get((task_name, rank))
         if r:
             r["status"] = status
             r["ts"] = time.time()
 
-    # 기존 update를 상태 갱신도 겸하도록
+    # Update progress and refresh status
     def update(self, task_name: str, rank: int, gpu_id: int, done: int, total: int, batch_size: int):
         row = self.rows.setdefault(
             (task_name, rank),

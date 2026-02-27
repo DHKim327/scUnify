@@ -1,5 +1,5 @@
 """
-scib-metrics 래퍼
+scib-metrics wrapper
 https://scib-metrics.readthedocs.io/en/stable/
 """
 
@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING
 
 import pandas as pd
 
-# JAX 메모리 설정 (GPU 메모리 부족 방지)
+# JAX memory settings (prevent GPU OOM)
 os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
 os.environ.setdefault("XLA_PYTHON_CLIENT_MEM_FRACTION", "0.5")
 
@@ -35,35 +35,35 @@ def _ensure_scib_metrics():
 
 
 def _validate_batch_info(adata: "AnnData", batch_key: str, label_key: str) -> bool:
-    """batch 정보가 유효한지 검증
+    """Validate whether batch information is valid for metric computation.
     
     Returns
     -------
     bool
-        True: batch 정보 유효 (메트릭 계산 가능)
-        False: batch 정보 무효 (메트릭 계산 불가)
+        True: batch info is valid (metrics can be computed)
+        False: batch info is invalid (metrics cannot be computed)
     """
-    # batch_key가 없으면 False
+    # Return False if batch_key is missing
     if batch_key not in adata.obs.columns:
         print(f"[WARNING] batch_key '{batch_key}' not found in adata.obs")
         return False
     
-    # batch와 label이 동일하면 batch correction 메트릭 계산 불가
+    # Batch correction metrics cannot be computed if batch == label
     if batch_key == label_key:
-        print(f"[WARNING] batch_key와 label_key가 동일합니다. Batch correction 메트릭을 비활성화합니다.")
+        print(f"[WARNING] batch_key and label_key are identical. Disabling batch correction metrics.")
         return False
     
-    # batch 값과 label 값이 완전히 동일하면 계산 불가
+    # Cannot compute if batch and label values are identical
     batch_values = set(adata.obs[batch_key].unique())
     label_values = set(adata.obs[label_key].unique())
     
     if batch_values == label_values:
-        # 추가 검증: 각 cell에 대해 실제로 동일한지 확인
+        # Additional check: verify per-cell identity
         if (adata.obs[batch_key] == adata.obs[label_key]).all():
-            print(f"[WARNING] batch와 label 값이 동일합니다. Batch correction 메트릭을 비활성화합니다.")
+            print(f"[WARNING] batch and label values are identical. Disabling batch correction metrics.")
             return False
     
-    # 각 label 내에 최소 2개 이상의 batch가 있어야 BRAS 계산 가능
+    # Need at least 2 batches per label for BRAS computation
     min_batches_per_label = float('inf')
     for label in label_values:
         mask = adata.obs[label_key] == label
@@ -71,31 +71,31 @@ def _validate_batch_info(adata: "AnnData", batch_key: str, label_key: str) -> bo
         min_batches_per_label = min(min_batches_per_label, n_batches)
     
     if min_batches_per_label < 2:
-        print(f"[WARNING] 일부 cell type 내에 batch가 1개뿐입니다. BRAS 메트릭이 실패할 수 있습니다.")
+        print(f"[WARNING] Some cell types have only 1 batch. BRAS metrics may fail.")
         return False
     
     return True
 
 
 class ScibWrapper:
-    """scib-metrics Benchmarker 래퍼
+    """scib-metrics Benchmarker wrapper.
     
     Parameters
     ----------
     adata
-        AnnData 객체 (cell x gene)
+        AnnData object (cell x gene)
     embedding_keys
-        평가할 embedding obsm 키 리스트 (예: ["X_scgpt", "X_uce"])
+        List of embedding obsm keys to evaluate (e.g., ["X_scgpt", "X_uce"])
     batch_key
-        batch 정보가 있는 obs 컬럼명
+        obs column name containing batch information
     label_key
-        cell type 라벨이 있는 obs 컬럼명
+        obs column name containing cell-type labels
     bio_metrics
-        Bio conservation 메트릭 설정 (None이면 기본값)
+        Bio conservation metric settings (None for defaults)
     batch_metrics
-        Batch correction 메트릭 설정 (None이면 기본값, "auto"면 자동 감지)
+        Batch correction metric settings (None for defaults, "auto" for auto-detection)
     n_jobs
-        neighbor 계산 병렬화 수
+        Number of parallel jobs for neighbor computation
     
     Examples
     --------
@@ -127,10 +127,10 @@ class ScibWrapper:
         self.label_key = label_key
         self.n_jobs = n_jobs
         
-        # batch 정보 유효성 검증
+        # Validate batch information
         self._batch_valid = _validate_batch_info(adata, batch_key, label_key)
         
-        # 기본 Bio conservation 메트릭 설정
+        # Default bio conservation metric settings
         if bio_metrics is None:
             bio_metrics = _BioConservation(
                 isolated_labels=True,
@@ -140,10 +140,10 @@ class ScibWrapper:
                 clisi_knn=True,
             )
         
-        # Batch correction 메트릭 설정 (자동 감지 또는 수동 설정)
+        # Batch correction metric settings (auto-detect or manual)
         if batch_metrics == "auto":
             if self._batch_valid:
-                print("[INFO] Batch 정보 유효. 모든 batch correction 메트릭 활성화.")
+                print("[INFO] Batch info valid. Enabling all batch correction metrics.")
                 batch_metrics = _BatchCorrection(
                     bras=True,
                     ilisi_knn=True,
@@ -152,7 +152,7 @@ class ScibWrapper:
                     pcr_comparison=True,
                 )
             else:
-                print("[INFO] Batch 정보 무효. Batch correction 메트릭 비활성화 (Bio conservation만 실행).")
+                print("[INFO] Batch info invalid. Disabling batch correction metrics (bio conservation only).")
                 batch_metrics = _BatchCorrection(
                     bras=False,
                     ilisi_knn=False,
@@ -172,7 +172,7 @@ class ScibWrapper:
         self.bio_metrics = bio_metrics
         self.batch_metrics = batch_metrics
         
-        # Benchmarker 초기화
+        # Initialize Benchmarker
         self.benchmarker = _Benchmarker(
             adata,
             batch_key=batch_key,
@@ -188,12 +188,12 @@ class ScibWrapper:
         self._results = None
     
     def prepare(self, neighbor_computer=None) -> "ScibWrapper":
-        """neighbors 계산 (prepare 단계)
+        """Compute neighbors (prepare step).
         
         Parameters
         ----------
         neighbor_computer
-            커스텀 neighbor 계산 함수 (None이면 pynndescent 사용)
+            Custom neighbor computation function (None uses pynndescent)
         
         Returns
         -------
@@ -204,7 +204,7 @@ class ScibWrapper:
         return self
     
     def benchmark(self) -> "ScibWrapper":
-        """메트릭 계산 실행
+        """Run metric computation.
         
         Returns
         -------
@@ -217,16 +217,16 @@ class ScibWrapper:
         return self
     
     def run(self, min_max_scale: bool = False) -> pd.DataFrame:
-        """prepare + benchmark + get_results 한번에 실행
+        """Run prepare + benchmark + get_results in one call.
         
         Parameters
         ----------
         min_max_scale
-            결과를 0-1로 스케일링할지 여부
+            Whether to scale results to 0-1
         
         Returns
         -------
-        결과 DataFrame
+        Results DataFrame
         """
         if not self._benchmarked:
             self.benchmark()
@@ -234,16 +234,16 @@ class ScibWrapper:
         return self._results
     
     def get_results(self, min_max_scale: bool = False) -> pd.DataFrame:
-        """결과 DataFrame 반환
+        """Return results DataFrame.
         
         Parameters
         ----------
         min_max_scale
-            결과를 0-1로 스케일링할지 여부
+            Whether to scale results to 0-1
         
         Returns
         -------
-        결과 DataFrame
+        Results DataFrame
         """
         if self._results is None:
             return self.run(min_max_scale=min_max_scale)
@@ -255,20 +255,20 @@ class ScibWrapper:
         show: bool = True,
         save_dir: str | None = None,
     ):
-        """scib 스타일 테이블 플로팅
+        """Plot scIB-style results table.
         
         Parameters
         ----------
         min_max_scale
-            결과를 0-1로 스케일링할지 여부
+            Whether to scale results to 0-1
         show
-            플롯을 화면에 표시할지 여부
+            Whether to display the plot on screen
         save_dir
-            저장 디렉토리 (None이면 저장 안함)
+            Save directory (None to skip saving)
         
         Returns
         -------
-        plottable.Table 객체
+        plottable.Table object
         """
         if not self._benchmarked:
             self.benchmark()
