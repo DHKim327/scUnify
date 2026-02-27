@@ -19,9 +19,9 @@ scUnify enables multiple single-cell RNA-seq foundation models (FMs) to be execu
 
 | Model | Paper | Code |
 |---|---|---|
-| scFoundation | | |
-| scGPT | | |
-| UCE | | |
+| scFoundation | Large-scale foundation model on single-cell transcriptomics | [biomap-research/scFoundation](https://github.com/biomap-research/scFoundation) |
+| scGPT | scGPT: toward building a foundation model for single-cell multi-omics using generative AI | [bowang-lab/scGPT](https://github.com/bowang-lab/scGPT) |
+| UCE | Universal Cell Embeddings: A Foundation Model for Cell Biology | [snap-stanford/UCE](https://github.com/snap-stanford/UCE) |
 
 ## Installation
 
