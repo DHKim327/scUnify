@@ -15,6 +15,14 @@ scUnify enables multiple single-cell RNA-seq foundation models (FMs) to be execu
 - **Integrated embedding evaluation.** Built-in support for scIB-metrics and scGraph enables standardized comparison of bio conservation, batch correction, and cell-type structure preservation across foundation models.
 - **Extensible and Jupyter-oriented design.** New FMs can be integrated through the defined inferencer interface without modifying the distributed core. Compatible with the scverse/scanpy ecosystem.
 
+## Supported Models
+
+| Model | Paper | Code |
+|---|---|---|
+| scFoundation | | |
+| scGPT | | |
+| UCE | | |
+
 ## Installation
 
 ```bash
@@ -68,18 +76,9 @@ evaluator.plot_results(save_dir="./results")
 - Multi-GPU Linux environment
 - Key dependencies: Ray (≥2.x), HuggingFace Accelerate (≥0.x), AnnData (≥0.10.x), PyTorch (≥2.0)
 
-## Citation
+## Status
 
-If you use scUnify in your research, please cite:
-
-```bibtex
-@article{kim2025scunify,
-  title={scUnify: A Unified Zero-Shot Inference Pipeline for Single-Cell Foundation Models},
-  author={Kim, Donghyeon},
-  year={2025},
-  url={https://github.com/DHKim327/scUnify}
-}
-```
+> 🚧 **Documentation and PyPI package are currently under development.** Stay tuned for updates.
 
 ## License
 
