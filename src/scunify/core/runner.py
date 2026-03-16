@@ -8,8 +8,6 @@ from pathlib import Path
 from typing import Any
 import ray
 from ray.train import FailureConfig, RunConfig, ScalingConfig
-from ray.train.torch import TorchTrainer
-
 from ..utils import load_yaml
 from .logger import ProgressActor, ProgressUI
 from .data_actor import DataLoaderActor
@@ -89,13 +87,9 @@ class ScUnifyRunner:
         import os
         # Increase worker startup timeout (24h) for large-scale datasets
         os.environ.setdefault("RAY_TRAIN_WORKER_GROUP_START_TIMEOUT_S", "86400")
-        
         if ray.is_initialized():
             return
         init_kwargs = dict(ignore_reinit_error=True, local_mode=False)
-        
-        # Disable dashboard to avoid PlacementGroupCleaner State API warnings
-        init_kwargs["include_dashboard"] = False
         
         init_kwargs["_temp_dir"] = str(self._temp_dir)
         init_kwargs["num_cpus"] = self.total_cpus
@@ -292,7 +286,8 @@ class ScUnifyRunner:
             """Wrapper executed within the model's runtime_env."""
             # Import inference loop inside the worker env (requires accelerate)
             from scunify.core.loops.inference_loop import inference_loop_per_worker
-            
+            from ray.train.torch import TorchTrainer
+
             trainer = TorchTrainer(
                 inference_loop_per_worker,
                 train_loop_config={"cfg": task_cfg, "progress_actor": progress_actor},
@@ -342,7 +337,7 @@ class ScUnifyRunner:
         the intermediate ``.npy`` files.
         """
         import numpy as np
-        import scanpy as sc
+        import anndata as ad
         from collections import defaultdict
 
         groups: dict[str, list] = defaultdict(list)
@@ -353,7 +348,7 @@ class ScUnifyRunner:
             if self.verbose:
                 print(f"[Runner] Post-processing: {Path(adata_path).name}")
 
-            adata = sc.read_h5ad(adata_path)
+            adata = ad.read_h5ad(adata_path)
 
             for t in task_list:
                 model_name = t.get("model_name").lower()

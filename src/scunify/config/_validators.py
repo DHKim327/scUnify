@@ -9,6 +9,14 @@ RESOURCES_LISTS: dict[str, list[str]] = {
         "best_model.pt",
         "vocab.json",
     ],
+    "Geneformer": [
+        "Geneformer-V2-104M/config.json",
+        "Geneformer-V2-104M/model.safetensors",
+        "gene_median_dictionary_gc104M.pkl",
+        "token_dictionary_gc104M.pkl",
+        "gene_name_id_dict_gc104M.pkl",
+        "ensembl_mapping_dict_gc104M.pkl",
+    ],
     "UCE": [
         "4layer_model.torch",
         "33l_8ep_1024t_1280.torch",

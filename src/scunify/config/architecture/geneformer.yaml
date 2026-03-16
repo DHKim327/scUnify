@@ -1,0 +1,40 @@
+V1-10M:
+  hidden_size: 256
+  num_hidden_layers: 6
+  num_attention_heads: 4
+  intermediate_size: 512
+  max_position_embeddings: 2048
+  vocab_size: 25426
+  pad_token_id: 0
+  hidden_act: relu
+  model_type: bert
+V2-104M:
+  hidden_size: 768
+  num_hidden_layers: 12
+  num_attention_heads: 12
+  intermediate_size: 3072
+  max_position_embeddings: 4096
+  vocab_size: 20275
+  pad_token_id: 0
+  hidden_act: relu
+  model_type: bert
+V2-104M_CLcancer:
+  hidden_size: 768
+  num_hidden_layers: 12
+  num_attention_heads: 12
+  intermediate_size: 3072
+  max_position_embeddings: 4096
+  vocab_size: 20275
+  pad_token_id: 0
+  hidden_act: relu
+  model_type: bert
+V2-316M:
+  hidden_size: 1152
+  num_hidden_layers: 18
+  num_attention_heads: 18
+  intermediate_size: 4608
+  max_position_embeddings: 4096
+  vocab_size: 20275
+  pad_token_id: 0
+  hidden_act: relu
+  model_type: bert

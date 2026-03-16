@@ -1,11 +1,11 @@
-"""Model-specific configuration creators"""
+"""Model-specific configuration creators
+
+Architecture parameters are pre-defined in config/architecture/*.yaml
+and shipped with the package. These functions only generate sample config files.
+"""
 
 from pathlib import Path
-import torch
 import yaml
-
-ARCHITECTURE_DIR = Path(__file__).parent / "architecture"
-ARCHITECTURE_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def create_scfoundation_config(resource_dir: Path, config_dir: Path):
@@ -28,26 +28,14 @@ def create_scfoundation_config(resource_dir: Path, config_dir: Path):
         },
     }
 
-    params = torch.load(model_path, map_location="cpu")
-
-    model_params = {}
-    model_params["cell"] = params["cell"]["config"]["model_config"]
-    model_params["rde"] = params["rde"]["config"]["model_config"]
-
     output_path = config_dir / "scfoundation_config_sample.yaml"
     with open(output_path, "w") as f:
         yaml.dump(config_data, f, default_flow_style=False, sort_keys=False)
     print(f"✅ 'scFoundation' Configuration File Created: {output_path}")
 
-    with open(ARCHITECTURE_DIR / "scfoundation.yaml", "w") as f:
-        yaml.dump(model_params, f, default_flow_style=False, sort_keys=False)
-    print("✅ 'scFoundation' Parameters Saved Completed")
-
 
 def create_scgpt_config(resource_dir: Path, config_dir: Path):
     """Create scGPT configuration files"""
-    import json
-
     resource_dir = resource_dir / "scGPT"
 
     config_data = {
@@ -74,33 +62,6 @@ def create_scgpt_config(resource_dir: Path, config_dir: Path):
     with open(output_path, "w") as f:
         yaml.dump(config_data, f, default_flow_style=False, sort_keys=False)
     print(f"✅ 'scGPT' Configuration File Created: {output_path}")
-
-    # Get Model Params
-    with open(resource_dir / "args.json", encoding="utf-8") as f:
-        model_args = json.load(f)
-
-    model_params = {
-        "d_model": model_args["embsize"],
-        "nhead": model_args["nheads"],
-        "d_hid": model_args["d_hid"],
-        "nlayers": model_args["nlayers"],
-        "nlayers_cls": model_args["n_layers_cls"],
-        "n_cls": 1,
-        "dropout": model_args["dropout"],
-        "pad_token": model_args["pad_token"],
-        "pad_value": model_args["pad_value"],
-        "do_mvc": model_args["MVC"],
-        "do_dab": False,
-        "use_batch_labels": False,
-        "domain_spec_batchnorm": False,
-        "explicit_zero_prob": False,
-        "fast_transformer_backend": "flash",
-        "pre_norm": False,
-    }
-
-    with open(ARCHITECTURE_DIR / "scgpt.yaml", "w") as f:
-        yaml.dump(model_params, f, default_flow_style=False, sort_keys=False)
-    print("✅ 'scGPT' Parameters Saved Completed")
 
 
 def create_uce_config(resource_dir: Path, config_dir: Path):
@@ -165,24 +126,53 @@ def create_uce_config(resource_dir: Path, config_dir: Path):
         yaml.dump(config_data, f, default_flow_style=False, sort_keys=False)
     print(f"✅ 'UCE' Configuration File Created: {output_path}")
 
-    model_params = {}
-    model_param = {}
-    model_param["pad_length"] = 1536
-    model_param["pad_token_idx"] = 0
-    model_param["chrom_token_left_idx"] = 1
-    model_param["chrom_token_right_idx"] = 2
-    model_param["CHROM_TOKEN_OFFSET"] = 143574
-    model_param["sample_size"] = 1024
-    model_param["CXG"] = True
-    model_param["output_dim"] = 1280
-    model_param["d_hid"] = 5120
-    model_param["token_dim"] = 5120
-    model_param["cls_token_idx"] = 3
-    model_params[4] = model_param.copy()
-    model_params[33] = model_param.copy()
-    with open(ARCHITECTURE_DIR / "uce.yaml", "w") as f:
-        yaml.dump(model_params, f, default_flow_style=False, sort_keys=False)
-    print("✅ 'UCE' Parameters Saved Completed")
+
+def create_geneformer_config(resource_dir: Path, config_dir: Path):
+    """Create Geneformer configuration files"""
+    resource_dir = resource_dir / "Geneformer"
+
+    config_data = {
+        "model_name": "Geneformer",
+        "preprocessing": {
+            "use_raw_counts": True,
+        },
+        "inference": {
+            "seed": 0,
+            "batch_size": 64,
+            "num_workers": 0,
+            "emb_layer": -1,
+            "emb_mode": "cls",
+            "model_variant": "V2-104M",
+        },
+        "resources": {
+            "model_dirs": {
+                "V1-10M": (resource_dir / "Geneformer-V1-10M").as_posix(),
+                "V2-104M": (resource_dir / "Geneformer-V2-104M").as_posix(),
+                "V2-104M_CLcancer": (resource_dir / "Geneformer-V2-104M_CLcancer").as_posix(),
+                "V2-316M": (resource_dir / "Geneformer-V2-316M").as_posix(),
+            },
+            "gene_dicts": {
+                "104M": {
+                    "gene_median_file": (resource_dir / "gene_median_dictionary_gc104M.pkl").as_posix(),
+                    "token_dict_file": (resource_dir / "token_dictionary_gc104M.pkl").as_posix(),
+                    "gene_name_id_file": (resource_dir / "gene_name_id_dict_gc104M.pkl").as_posix(),
+                    "ensembl_mapping_file": (resource_dir / "ensembl_mapping_dict_gc104M.pkl").as_posix(),
+                },
+                "30M": {
+                    "gene_median_file": (resource_dir / "gene_dictionaries_30m" / "gene_median_dictionary_gc30M.pkl").as_posix(),
+                    "token_dict_file": (resource_dir / "gene_dictionaries_30m" / "token_dictionary_gc30M.pkl").as_posix(),
+                    "gene_name_id_file": (resource_dir / "gene_dictionaries_30m" / "gene_name_id_dict_gc30M.pkl").as_posix(),
+                    "ensembl_mapping_file": (resource_dir / "gene_dictionaries_30m" / "ensembl_mapping_dict_gc30M.pkl").as_posix(),
+                },
+            },
+        },
+        "model_input_size": 4096,
+    }
+
+    output_path = config_dir / "geneformer_config_sample.yaml"
+    with open(output_path, "w") as f:
+        yaml.dump(config_data, f, default_flow_style=False, sort_keys=False)
+    print(f"✅ 'Geneformer' Configuration File Created: {output_path}")
 
 
 # Config creator mapping
@@ -190,4 +180,5 @@ CONFIG_CREATORS = {
     "scGPT": create_scgpt_config,
     "scFoundation": create_scfoundation_config,
     "UCE": create_uce_config,
+    "Geneformer": create_geneformer_config,
 }

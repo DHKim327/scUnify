@@ -1,5 +1,5 @@
 # Lazy imports - loaded only when needed
-__all__ = ["ScFoundationDataset", "ScGPTDataset", "UCEDataset"]
+__all__ = ["ScFoundationDataset", "ScGPTDataset", "UCEDataset", "GeneformerDataset"]
 
 _IMPORTED = {}
 
@@ -20,5 +20,10 @@ def __getattr__(name):
         if name not in _IMPORTED:
             from ._uce_dataset import UCEDataset
             _IMPORTED[name] = UCEDataset
+        return _IMPORTED[name]
+    elif name == "GeneformerDataset":
+        if name not in _IMPORTED:
+            from ._geneformer_dataset import GeneformerDataset
+            _IMPORTED[name] = GeneformerDataset
         return _IMPORTED[name]
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
