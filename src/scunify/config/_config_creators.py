@@ -175,10 +175,47 @@ def create_geneformer_config(resource_dir: Path, config_dir: Path):
     print(f"✅ 'Geneformer' Configuration File Created: {output_path}")
 
 
+def create_nicheformer_config(resource_dir: Path, config_dir: Path):
+    """Create Nicheformer configuration files"""
+    resource_dir = resource_dir / "Nicheformer"
+
+    config_data = {
+        "model_name": "Nicheformer",
+        "preprocessing": {
+            "use_raw_counts": True,
+        },
+        "inference": {
+            "seed": 0,
+            "batch_size": 32,
+            "num_workers": 0,
+            "emb_layer": -1,
+            "species": "human",
+            "assay": "10x_3v3",
+            "modality": "dissociated",
+            "max_seq_len": 4096,
+            "context_length": 1500,
+            "ensembl_key": None,
+        },
+        "resources": {
+            "model_dir": (resource_dir / "model").as_posix(),
+            "gene_ref_file": (resource_dir / "model" / "model.h5ad").as_posix(),
+            "technology_mean_file": (
+                resource_dir / "model_means" / "dissociated_mean_script.npy"
+            ).as_posix(),
+        },
+    }
+
+    output_path = config_dir / "nicheformer_config_sample.yaml"
+    with open(output_path, "w") as f:
+        yaml.dump(config_data, f, default_flow_style=False, sort_keys=False)
+    print(f"✅ 'Nicheformer' Configuration File Created: {output_path}")
+
+
 # Config creator mapping
 CONFIG_CREATORS = {
     "scGPT": create_scgpt_config,
     "scFoundation": create_scfoundation_config,
     "UCE": create_uce_config,
     "Geneformer": create_geneformer_config,
+    "Nicheformer": create_nicheformer_config,
 }

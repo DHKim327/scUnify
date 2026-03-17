@@ -2,7 +2,7 @@ import re
 from typing import Type
 
 # Lazy imports
-__all__ = ["resolve_inferencer", "ScFoundationInferencer", "ScGPTInferencer", "UCEInferencer", "GeneformerInferencer"]
+__all__ = ["resolve_inferencer", "ScFoundationInferencer", "ScGPTInferencer", "UCEInferencer", "GeneformerInferencer", "NicheformerInferencer"]
 
 def _to_camel(name: str) -> str:
     parts = re.sub(r"[-_]+", " ", str(name)).strip().split()
@@ -14,6 +14,7 @@ _ALIAS = {
     "scgpt": "ScGPTInferencer",
     "uce": "UCEInferencer",
     "geneformer": "GeneformerInferencer",
+    "nicheformer": "NicheformerInferencer",
 }
 
 _IMPORTED = {}
@@ -40,6 +41,11 @@ def __getattr__(name):
         if name not in _IMPORTED:
             from ._geneformer_inferencer import GeneformerInferencer
             _IMPORTED[name] = GeneformerInferencer
+        return _IMPORTED[name]
+    elif name == "NicheformerInferencer":
+        if name not in _IMPORTED:
+            from ._nicheformer_inferencer import NicheformerInferencer
+            _IMPORTED[name] = NicheformerInferencer
         return _IMPORTED[name]
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 

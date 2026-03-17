@@ -1,5 +1,5 @@
 # Lazy imports to avoid loading model dependencies at package import time
-__all__ = ["ScFoundationWrapper", "ScGPTWrapper", "UCEWrapper", "GeneformerWrapper"]
+__all__ = ["ScFoundationWrapper", "ScGPTWrapper", "UCEWrapper", "GeneformerWrapper", "NicheformerWrapper"]
 
 def __getattr__(name):
     if name == "ScFoundationWrapper":
@@ -14,4 +14,7 @@ def __getattr__(name):
     elif name == "GeneformerWrapper":
         from ._geneformer_wrapper import GeneformerWrapper
         return GeneformerWrapper
+    elif name == "NicheformerWrapper":
+        from ._nicheformer_wrapper import NicheformerWrapper
+        return NicheformerWrapper
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

@@ -1,0 +1,18 @@
+name: nicheformer_env
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - numpy>=1.26,<2.0
+  - scipy>=1.11
+  - pandas>=2.0
+  - scanpy>=1.9
+  - numba>=0.58
+  - pip
+  - pip:
+      - torch>=2.0.1
+      - transformers>=4.49
+      - accelerate>=0.26
+      - anndata>=0.9
+      - huggingface_hub>=0.20
+      - pyensembl>=2.3

@@ -1,0 +1,11 @@
+default:
+  dim_model: 512
+  nheads: 16
+  nlayers: 12
+  dim_feedforward: 1024
+  n_tokens: 20340
+  context_length: 1500
+  learnable_pe: true
+  dropout: 0.0
+  batch_first: true
+  model_type: nicheformer

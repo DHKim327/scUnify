@@ -11,9 +11,9 @@
 
 Before starting, ensure you have:
 
-1. **Original model source code** cloned into `Foundation/{ModelName}/`
-2. **Pretrained weights** downloaded into `Resources/{ModelName}/`
-3. **Understanding of the model's inference pipeline**: tokenization → model forward → embedding extraction
+1. **Original model source code** accessible (any location — just need to read the code)
+2. **Pretrained weights** available (will be downloaded into `resources/{ModelName}/` via `_download.py`)
+3. **Understanding of the model's inference pipeline**: tokenization & dataset → model load → forward → embedding extraction
 
 ---
 
@@ -30,7 +30,7 @@ src/scunify/
 └── config/envs/mymodel_env.yaml            # Conda environment spec
 ```
 
-Plus **registration** in 5 existing files (detailed in Step 8).
+Plus **registration** in 6 existing files (detailed in Step 8).
 
 ---
 
@@ -52,7 +52,6 @@ User Config YAML
 Key points:
 - **Each model runs in its own conda env** (via Ray `runtime_env`)
 - **torch is NOT available** in the base scUnify env — only in model-specific envs
-- **ScUnifyConfig uses `.get()` method** — NOT subscript `config["key"]` (no `__getitem__`)
 - **BaseInferencer** provides `build_dataloader()`, `postprocess()`, `save_outputs()` for free
 
 ---
@@ -68,7 +67,6 @@ from torch.utils.data import Dataset, SequentialSampler
 
 class MyModelDataset(Dataset):
     def __init__(self, adata, config):
-        # Access config via .get() — NEVER use config["key"]
         inference_cfg = config.get("inference", {})
         resources = config.get("resources", {})
 
@@ -109,17 +107,15 @@ class MyModelDataset(Dataset):
 
 | Rule | Why |
 |------|-----|
-| `config.get("key", default)` only | `ScUnifyConfig` has no `__getitem__` |
 | Return `"cid"` (cell index) in every sample | Used to restore original order after DDP gather |
 | Set `self.sampler = SequentialSampler(self)` | BaseInferencer passes it to DataLoader |
 | Custom `collator` as static method or `None` | BaseInferencer checks `getattr(ds, "collator", None)` |
 | Keep heavy computation in `__init__`, not `__getitem__` | Avoid per-sample overhead in DataLoader workers |
 
-### Common Pitfalls (from Geneformer experience)
+### Common Pitfalls
 
-1. **Gene dictionary format**: Check if `{gene_name: ensembl_id}` or `{ensembl_id: gene_name}` — do NOT blindly invert
-2. **Special token IDs**: If `CLS_token_id == pad_token_id == 0`, use **length-based attention mask** (not `input_ids != 0`)
-3. **Sparse matrix**: Use `issparse(X)` check — `adata.X` can be sparse or dense
+1. **Gene ID format**: scUnify input uses **HUGO gene symbols** (e.g. `TP53`, `BRCA1`). If the model requires ENSEMBL IDs or other formats, implement conversion logic in the Dataset.
+2. **Sparse matrix**: Use `issparse(X)` check — `adata.X` can be sparse or dense
 
 ---
 
@@ -276,7 +272,7 @@ Each model runs in its own conda env via Ray's `runtime_env`.
 
 ## 8. Step-by-Step: Register the Model
 
-Update these **5 files** to register the new model:
+Update these **6 files** to register the new model:
 
 ### 8-1. `inferencer/__init__.py`
 
@@ -371,6 +367,27 @@ CONFIG_CREATORS = {
 }
 ```
 
+### 8-6. `config/_download.py`
+
+```python
+def download_mymodel(resource_dir: Path) -> None:
+    """Download MyModel resources."""
+    output_dir = resource_dir / "MyModel"
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Download all required files (weights, vocab, config, custom code, etc.)
+    # Use hf_hub_download(), urllib, or copy from Foundations/
+    ...
+
+# Add to downloaders dict:
+downloaders = {
+    ...
+    "MyModel": download_mymodel,
+}
+```
+
+> **Important**: Download **all** files the model needs at runtime, including custom Python files for HuggingFace `trust_remote_code=True` models. The download list must match `_validators.py`'s `RESOURCES_LISTS`.
+
 ---
 
 ## 9. Checklist
@@ -381,12 +398,13 @@ Use this checklist to verify completeness:
 - [ ] `registry/models/_mymodel_wrapper.py` — Wrapper class with `__init__`, `forward` → `(B, D)`
 - [ ] `inferencer/_mymodel_inferencer.py` — Inferencer with `build_dataset`, `build_model`, `forward_step`
 - [ ] `config/architecture/mymodel.yaml` — Model hyperparameters
-- [ ] `config/envs/mymodel_env.yaml` — Conda env spec
+- [ ] `config/envs/mymodel_env.yaml` — Conda env spec with **all** runtime dependencies
 - [ ] `inferencer/__init__.py` — Added to `_ALIAS`, `__all__`, `__getattr__`
 - [ ] `registry/dataset/__init__.py` — Added to `__all__`, `__getattr__`
 - [ ] `registry/models/__init__.py` — Added to `__all__`, `__getattr__`
 - [ ] `config/_validators.py` — Added to `RESOURCES_LISTS`
 - [ ] `config/_config_creators.py` — Added creator function + `CONFIG_CREATORS`
+- [ ] `config/_download.py` — Added download function + `downloaders` dict
 - [ ] Algorithm verification: input/output identical to original model code
 - [ ] `config.get()` used everywhere (never `config["key"]` on ScUnifyConfig)
 - [ ] `forward_step` returns `(emb, cid)` with correct shapes
@@ -439,15 +457,16 @@ You are integrating {ModelName} into the scUnify framework.
 
 ---
 
-## 11. Known Gotchas (Lessons from Geneformer Integration)
+## 11. Known Gotchas
 
-| Issue | What Happened | How to Avoid |
-|-------|--------------|--------------|
-| `ScUnifyConfig` not subscriptable | Used `config["inference"]` → TypeError | Always use `config.get("inference", {})` |
-| Gene dictionary direction | Inverted `{name→id}` dict thinking it was `{id→name}` | Read the pickle and print `.items()[:3]` first |
-| CLS token = pad token = 0 | `attention_mask = (input_ids != 0)` masked out CLS | Use **length-based** mask, not value-based |
-| scanpy in base env | `import scanpy` in postprocessing → ImportError | Use `anndata` directly (torch-free base env) |
-| Architecture extraction at setup | `torch.load()` in `_config_creators.py` → torch dependency | Pre-package architecture YAML, no runtime extraction |
+| Issue | How to Avoid |
+|-------|--------------|
+| `ScUnifyConfig` not subscriptable | Always use `config.get("key", default)`, never `config["key"]` |
+| Gene ID mismatch | scUnify input = HUGO gene symbol. 모델이 ENSEMBL 등 다른 format을 요구하면 Dataset에서 변환 로직 구현 |
+| Missing conda dependencies | env.yaml에 **런타임에 필요한 모든 패키지** 기재. `import` 시점에야 발견되므로 누락 주의 |
+| scanpy in base env | base env에는 torch/scanpy 없음. `_config_creators.py` 등에서 torch import 금지. `anndata`만 사용 |
+| Architecture extraction at setup | `torch.load()` 등으로 runtime에 architecture 추출하지 말 것. YAML로 pre-package |
+| Download list incomplete | `_download.py`와 `_validators.py`의 파일 목록이 **정확히 일치**해야 함. 누락 시 model load에서 실패 |
 
 ---
 
