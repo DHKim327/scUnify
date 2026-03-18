@@ -64,7 +64,8 @@ class GeneformerDataset(Dataset):
                 f"Mapped {np.sum(ensembl_ids != None)}/{len(ensembl_ids)} gene names to Ensembl IDs"
             )
 
-        # Map to canonical ensembl IDs
+        # Map to canonical ensembl IDs via gene_mapping_dict
+        # (identical to TranscriptomeTokenizer.sum_ensembl_ids)
         gene_keys_set = set(gene_token_dict.keys())
         gene_mapping_dict_filtered = {k: v for k, v in gene_mapping_dict.items() if v in gene_keys_set}
 
@@ -73,19 +74,19 @@ class GeneformerDataset(Dataset):
             for eid in ensembl_ids
         ])
 
-        # Filter to genes that are in the token dictionary and have a median value
-        valid_mask = np.array([
-            (cid is not None and cid in gene_token_dict and cid in gene_median_dict)
-            for cid in canonical_ids
-        ])
+        # Filter to genes in gene_token_dict (original: genelist_dict)
+        valid_mask = np.array([cid is not None for cid in canonical_ids])
         valid_indices = np.where(valid_mask)[0]
         valid_canonical_ids = canonical_ids[valid_indices]
 
         logger.info(f"Valid genes for Geneformer: {len(valid_indices)}/{adata.n_vars}")
 
-        # Precompute arrays for valid genes
-        self.norm_factor_vector = np.array([gene_median_dict[cid] for cid in valid_canonical_ids])
-        self.gene_tokens = np.array([gene_token_dict[cid] for cid in valid_canonical_ids])
+        # Collapse duplicate canonical IDs by summing counts
+        # (identical to TranscriptomeTokenizer.sum_ensembl_ids)
+        unique_canonical_ids, inverse_indices = np.unique(valid_canonical_ids, return_inverse=True)
+        n_duplicates = len(valid_canonical_ids) - len(unique_canonical_ids)
+        if n_duplicates > 0:
+            logger.info(f"Collapsing {n_duplicates} duplicate canonical IDs by summing counts")
 
         # Get n_counts for normalization
         if "n_counts" in adata.obs.columns:
@@ -98,12 +99,25 @@ class GeneformerDataset(Dataset):
             else:
                 self.n_counts = X.sum(axis=1).astype(np.float64)
 
-        # Store raw count matrix (only valid gene columns)
+        # Extract valid gene columns and collapse duplicates by summing
         X = adata.X
         if issparse(X):
-            self.count_matrix = X[:, valid_indices].toarray().astype(np.float64)
+            valid_X = X[:, valid_indices].toarray().astype(np.float64)
         else:
-            self.count_matrix = X[:, valid_indices].astype(np.float64)
+            valid_X = np.asarray(X[:, valid_indices], dtype=np.float64)
+
+        # Always collapse via inverse_indices to ensure column order matches
+        # unique_canonical_ids (np.unique sorts alphabetically)
+        n_unique = len(unique_canonical_ids)
+        collapsed_X = np.zeros((adata.n_obs, n_unique), dtype=np.float64)
+        for i in range(n_unique):
+            cols = np.where(inverse_indices == i)[0]
+            collapsed_X[:, i] = valid_X[:, cols].sum(axis=1)
+        self.count_matrix = collapsed_X
+
+        # Precompute arrays for unique canonical genes
+        self.norm_factor_vector = np.array([gene_median_dict[cid] for cid in unique_canonical_ids])
+        self.gene_tokens = np.array([gene_token_dict[cid] for cid in unique_canonical_ids])
 
         self.model_input_size = model_input_size
         self.n_cells = adata.n_obs

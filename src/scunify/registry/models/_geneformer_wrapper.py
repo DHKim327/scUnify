@@ -12,6 +12,12 @@ class GeneformerWrapper(nn.Module):
         self.emb_layer = inference_cfg.get("emb_layer", -1)
         self.emb_mode = inference_cfg.get("emb_mode", "cls")
 
+        # Compute layer index using the same logic as geneformer's EmbExtractor:
+        # quant_layers(model) returns num_hidden_layers, so with emb_layer=-1:
+        # layer_to_quant = num_hidden_layers + (-1) = second-to-last hidden layer
+        num_layers = self.model.config.num_hidden_layers
+        self._layer_to_quant = num_layers + self.emb_layer
+
     def forward(self, input_ids, attention_mask):
         with torch.no_grad():
             outputs = self.model(
@@ -19,9 +25,10 @@ class GeneformerWrapper(nn.Module):
                 attention_mask=attention_mask,
             )
 
-        # hidden_states: tuple of (batch, seq_len, hidden_size) per layer
-        # index -1 = last layer, -2 = second-to-last (Geneformer default uses emb_layer=-1 for 2nd-to-last)
-        hidden = outputs.hidden_states[self.emb_layer]
+        # hidden_states: tuple of (n_layers+1) tensors, index 0 = embedding output
+        # Use quant_layers + emb_layer indexing (same as geneformer EmbExtractor)
+        # e.g. 12-layer model, emb_layer=-1 → index 11 (second-to-last)
+        hidden = outputs.hidden_states[self._layer_to_quant]
 
         if self.emb_mode == "cls":
             # CLS token is at position 0

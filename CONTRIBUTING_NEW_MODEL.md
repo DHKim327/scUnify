@@ -15,6 +15,11 @@ Before starting, ensure you have:
 2. **Pretrained weights** available (will be downloaded into `resources/{ModelName}/` via `_download.py`)
 3. **Understanding of the model's inference pipeline**: tokenization & dataset → model load → forward → embedding extraction
 
+> **CRITICAL: scUnify output MUST be identical to the original model code output (cell-level cosine similarity ~1.0).**
+> The Dataset preprocessing/tokenization logic and the Wrapper's embedding extraction layer/mode must exactly reproduce the original code.
+> Do NOT implement "approximately" — given the same input, the embeddings MUST be identical.
+> After implementation, always verify by comparing cosine similarity against the original code's output.
+
 ---
 
 ## 1. Architecture Overview
@@ -421,7 +426,6 @@ You are integrating {ModelName} into the scUnify framework.
 ## scUnify Context
 - scUnify is a unified zero-shot inference pipeline for single-cell RNA-seq foundation models.
 - Each model has 3 files: Dataset, Wrapper, Inferencer (see CONTRIBUTING_NEW_MODEL.md).
-- Config access: use `config.get("key", default)` — ScUnifyConfig has NO __getitem__.
 - forward_step must return `(embeddings, cell_ids)` with shapes `(B, D)` and `(B,)`.
 - Dataset must set `self.sampler = SequentialSampler(self)`.
 - Dataset must return `"cid"` (cell index) in every sample dict.
@@ -461,12 +465,13 @@ You are integrating {ModelName} into the scUnify framework.
 
 | Issue | How to Avoid |
 |-------|--------------|
-| `ScUnifyConfig` not subscriptable | Always use `config.get("key", default)`, never `config["key"]` |
-| Gene ID mismatch | scUnify input = HUGO gene symbol. 모델이 ENSEMBL 등 다른 format을 요구하면 Dataset에서 변환 로직 구현 |
-| Missing conda dependencies | env.yaml에 **런타임에 필요한 모든 패키지** 기재. `import` 시점에야 발견되므로 누락 주의 |
-| scanpy in base env | base env에는 torch/scanpy 없음. `_config_creators.py` 등에서 torch import 금지. `anndata`만 사용 |
-| Architecture extraction at setup | `torch.load()` 등으로 runtime에 architecture 추출하지 말 것. YAML로 pre-package |
-| Download list incomplete | `_download.py`와 `_validators.py`의 파일 목록이 **정확히 일치**해야 함. 누락 시 model load에서 실패 |
+| Gene ID mismatch | scUnify input = HUGO gene symbols. If the model requires other formats, implement conversion in the Dataset |
+| Missing conda dependencies | List **all** runtime packages in env.yaml. Missing deps are only discovered at `import` time |
+| Base env has no torch | Never `import torch` in setup-time code (`_config_creators.py` etc.). Only `anndata` is available in the base env |
+| Download list incomplete | File lists in `_download.py` and `_validators.py` must **exactly match**. Missing files cause model load failures |
+| Embedding layer index mismatch | Always check how the original code computes the extraction layer index. Do not assume Python negative indexing is equivalent |
+| Preprocessing / tokenization mismatch | Reproduce the original code's exact gene filtering, normalization, and tokenization logic. Even small differences change the final embeddings |
+| Verify with cosine similarity | After implementation, compare cell-level cosine similarity against the original code's output. It must be ~1.0 |
 
 ---
 
