@@ -9,6 +9,7 @@ class ScUnifyConfig:
         self.adata_dir = Path(adata_dir)
         self.config_dir = Path(config_dir)
         self.config = load_yaml(self.config_dir)
+        self.mode = self.config.get("mode", "inference")
         self._parse_configs()
         self._architecture_dir = Path(__file__).resolve().parent / "architecture" / f"{self.model_name.lower()}.yaml"
         self.task_name = (

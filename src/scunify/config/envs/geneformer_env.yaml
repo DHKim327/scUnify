@@ -14,3 +14,4 @@ dependencies:
       - datasets>=2.12
       - anndata>=0.9
       - accelerate>=1
+      - peft>=0.7.0

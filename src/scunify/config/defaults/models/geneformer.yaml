@@ -1,0 +1,35 @@
+# Geneformer — model-specific configuration
+# Shared by both inference and training configs.
+
+model_name: Geneformer
+
+preprocessing:
+  use_raw_counts: true
+
+inference:
+  seed: 0
+  batch_size: 64
+  num_workers: 0
+  emb_layer: -1
+  emb_mode: cls
+  model_variant: V2-104M
+
+resources:
+  model_dirs:
+    V1-10M: "{resource_dir}/Geneformer/Geneformer-V1-10M"
+    V2-104M: "{resource_dir}/Geneformer/Geneformer-V2-104M"
+    V2-104M_CLcancer: "{resource_dir}/Geneformer/Geneformer-V2-104M_CLcancer"
+    V2-316M: "{resource_dir}/Geneformer/Geneformer-V2-316M"
+  gene_dicts:
+    104M:
+      gene_median_file: "{resource_dir}/Geneformer/gene_median_dictionary_gc104M.pkl"
+      token_dict_file: "{resource_dir}/Geneformer/token_dictionary_gc104M.pkl"
+      gene_name_id_file: "{resource_dir}/Geneformer/gene_name_id_dict_gc104M.pkl"
+      ensembl_mapping_file: "{resource_dir}/Geneformer/ensembl_mapping_dict_gc104M.pkl"
+    30M:
+      gene_median_file: "{resource_dir}/Geneformer/gene_dictionaries_30m/gene_median_dictionary_gc30M.pkl"
+      token_dict_file: "{resource_dir}/Geneformer/gene_dictionaries_30m/token_dictionary_gc30M.pkl"
+      gene_name_id_file: "{resource_dir}/Geneformer/gene_dictionaries_30m/gene_name_id_dict_gc30M.pkl"
+      ensembl_mapping_file: "{resource_dir}/Geneformer/gene_dictionaries_30m/ensembl_mapping_dict_gc30M.pkl"
+
+model_input_size: 4096

@@ -269,7 +269,18 @@ class ScUnifyRunner:
         return time.time() - t0
 
     # -------------------- Execution --------------------
-    def run(self) -> dict[str, list[dict]]:
+    def run(self, mode: str = "inference") -> dict[str, list[dict]]:
+        """Run the pipeline.
+
+        Args:
+            mode: ``"inference"`` (default) or ``"training"``.
+        """
+        if mode == "training":
+            return self._run_training()
+        return self._run_inference()
+
+    def _run_inference(self) -> dict[str, list[dict]]:
+        """Original inference pipeline — unchanged."""
         # Load data via per-model actors
         t_load_data = self._prepare_adata_payloads()
 
@@ -309,11 +320,11 @@ class ScUnifyRunner:
                 "failure_config": FailureConfig(max_failures=0),
                 "storage_path": str(self._storage_dir) if self._storage_dir else None,
             }
-            
+
             # Determine conda env from the task's model_name
             runtime_env = self._get_runtime_env(t)
             _launch_remote = ray.remote(runtime_env=runtime_env)(_launch_wrapper)
-            
+
             t.accelerate = self.accel_cfg
             t.t_load_d = t_load_data
             jobs.append(_launch_remote.remote(t, scaling_cfg, run_cfg, progress))
@@ -324,6 +335,66 @@ class ScUnifyRunner:
         results = ray.get(jobs)
 
         # Post-processing: merge .npy embeddings into AnnData and save as .h5ad
+        self._postprocess_results()
+
+        return results
+
+    def _run_training(self) -> dict[str, list[dict]]:
+        """Training pipeline — uses TrainingProgressActor and training_loop."""
+        from .training_logger import TrainingProgressActor, TrainingProgressUI
+
+        t_load_data = self._prepare_adata_payloads()
+
+        # Training progress actor (separate from inference)
+        progress = TrainingProgressActor.remote()
+        for t, n_gpus in zip(self.tasks, self.per_worker_gpus):
+            task_name = t.get("task_name")
+            training_cfg = t.get("training", {})
+            bs = int(training_cfg.get("batch_size", 32))
+            total_epochs = int(training_cfg.get("epochs", 5))
+            for rank in range(int(n_gpus)):
+                ray.get(progress.register.remote(task_name, rank, None, bs, total_epochs))
+
+        def _launch_training_wrapper(task_cfg, scaling_cfg_kwargs, run_cfg_kwargs, progress_actor):
+            """Wrapper for training — imports training_loop inside worker env."""
+            from scunify.core.loops.training_loop import training_loop_per_worker
+            from ray.train.torch import TorchTrainer
+
+            trainer = TorchTrainer(
+                training_loop_per_worker,
+                train_loop_config={"cfg": task_cfg, "progress_actor": progress_actor},
+                scaling_config=ScalingConfig(**scaling_cfg_kwargs),
+                run_config=RunConfig(**run_cfg_kwargs),
+            )
+            result = trainer.fit()
+            return result.metrics
+
+        jobs = []
+        for t, n_gpus, n_cpus in zip(self.tasks, self.per_worker_gpus, self.per_worker_cpus):
+            scaling_cfg = {
+                "num_workers": int(n_gpus),
+                "use_gpu": True,
+                "resources_per_worker": {"CPU": int(n_cpus), "GPU": 1},
+                "placement_strategy": self.placement_strategy,
+            }
+            run_cfg = {
+                "failure_config": FailureConfig(max_failures=0),
+                "storage_path": str(self._storage_dir) if self._storage_dir else None,
+            }
+
+            runtime_env = self._get_runtime_env(t)
+            _launch_remote = ray.remote(runtime_env=runtime_env)(_launch_training_wrapper)
+
+            t.accelerate = self.accel_cfg
+            t.t_load_d = t_load_data
+            jobs.append(_launch_remote.remote(t, scaling_cfg, run_cfg, progress))
+
+        ui = TrainingProgressUI(progress, refresh_hz=4, poll_interval=0.25)
+        ui.run_until_complete()
+
+        results = ray.get(jobs)
+
+        # Post-processing for training: same as inference if embeddings were extracted
         self._postprocess_results()
 
         return results
@@ -354,6 +425,7 @@ class ScUnifyRunner:
                 model_name = t.get("model_name").lower()
                 obsm_key = f"X_{model_name}"
                 npy_path = t.save_dir / f"{t.task_name}.npy"
+                splits_path = t.save_dir / f"{t.task_name}_splits.npy"
 
                 if npy_path.exists():
                     embedding = np.load(str(npy_path))
@@ -364,6 +436,13 @@ class ScUnifyRunner:
                     if self.verbose:
                         print(f"  - [WARNING] {npy_path} not found, skipping {obsm_key}")
 
+                # Load split labels if available (training mode)
+                if splits_path.exists():
+                    split_labels = np.load(str(splits_path), allow_pickle=True)
+                    adata.obs["_scunify_split"] = split_labels
+                    if self.verbose:
+                        print(f"  - Loaded split labels: {dict(zip(*np.unique(split_labels, return_counts=True)))}")
+
             out_dir = task_list[0].save_dir
             out_path = out_dir / Path(adata_path).name
             adata.write_h5ad(out_path)
@@ -371,11 +450,12 @@ class ScUnifyRunner:
                 print(f"  - Saved: {out_path}")
 
             for t in task_list:
-                npy_path = t.save_dir / f"{t.task_name}.npy"
-                if npy_path.exists():
-                    npy_path.unlink()
-                    if self.verbose:
-                        print(f"  - Removed: {npy_path}")
+                for suffix in [".npy", "_splits.npy"]:
+                    p = t.save_dir / f"{t.task_name}{suffix}"
+                    if p.exists():
+                        p.unlink()
+                        if self.verbose:
+                            print(f"  - Removed: {p}")
 
             del adata
 

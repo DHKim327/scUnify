@@ -1,0 +1,20 @@
+# scFoundation — model-specific configuration
+# Shared by both inference and training configs.
+
+model_name: scFoundation
+
+preprocessing:
+  option: "F"
+  normalize_total: 10000.0
+  log1p: true
+
+inference:
+  version: cell
+  pool_type: all
+  tgthighres: t4
+  batch_size: 1
+  num_workers: 0
+
+resources:
+  model_file: "{resource_dir}/scFoundation/models.ckpt"
+  gene_list: "{resource_dir}/scFoundation/OS_scRNA_gene_index.19264.tsv"

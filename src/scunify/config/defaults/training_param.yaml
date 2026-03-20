@@ -1,0 +1,50 @@
+# scUnify Training Default Parameters
+# All models share these defaults; model-specific overrides go in models/*.yaml
+
+training:
+  mode: "lora"
+  epochs: 50
+  batch_size: 32
+  gradient_accumulation_steps: 1
+  seed: 42
+  mixed_precision: true
+  save_checkpoint: true
+  extract_embeddings: true
+
+  lora:
+    rank: 8
+    alpha: 1                          # scaling = alpha/rank = 0.125
+    dropout: 0.0
+    targets:
+      - query
+      - value
+    layer_strategy: "first"           # "first" | "last" | "all"
+    layer_ratio: 0.5                  # 50% of total layers
+
+  optimizer:
+    type: "adam"                       # adam (not adamw); scPEFT default
+    lr: 1.0e-5
+    betas: [0.9, 0.999]
+    weight_decay: 0.0
+
+  scheduler:
+    type: "cosine"
+    warmup_ratio: 0.9                 # 90% warmup → 10% cosine decay
+
+  early_stopping:
+    patience: 5
+    monitor: "val_loss"
+    min_delta: 0.0
+
+  split:
+    method: "column_key"              # "column_key" | "random"
+    column_key: null                  # str | list[str] | null (null → random)
+    train_ratio: 0.8                  # 80% for training (train + valid)
+    valid_ratio: 0.1                  # 10% of training set for validation
+    test_ratio: 0.2                   # 20% held out for evaluation
+    seed: 42
+
+  mlm:
+    mask_prob: 0.15
+    mask_token_prob: 0.8
+    random_token_prob: 0.1

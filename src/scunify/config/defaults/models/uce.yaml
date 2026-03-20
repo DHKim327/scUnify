@@ -1,0 +1,33 @@
+# UCE — model-specific configuration
+# Shared by both inference and training configs.
+
+model_name: UCE
+
+preprocessing:
+  species: human
+  filter: false
+  filter_genes_min_cells: 10
+  filter_cells_min_genes: 25
+  hv_genes: null
+
+inference:
+  seed: 0
+  nlayers: 4  # or 33
+  batch_size: 25
+  num_workers: 0
+
+resources:
+  spec_chrom_csv_path: "{resource_dir}/UCE/species_chrom.csv"
+  token_file: "{resource_dir}/UCE/all_tokens.torch"
+  offset_pkl_path: "{resource_dir}/UCE/species_offsets.pkl"
+  4_layer_model: "{resource_dir}/UCE/4layer_model.torch"
+  33_layer_model: "{resource_dir}/UCE/33l_8ep_1024t_1280.torch"
+  protein_embeddings:
+    human: "{resource_dir}/UCE/protein_embeddings/Homo_sapiens.GRCh38.gene_symbol_to_embedding_ESM2.pt"
+    mouse: "{resource_dir}/UCE/protein_embeddings/Mus_musculus.GRCm39.gene_symbol_to_embedding_ESM2.pt"
+    frog: "{resource_dir}/UCE/protein_embeddings/Xenopus_tropicalis.Xenopus_tropicalis_v9.1.gene_symbol_to_embedding_ESM2.pt"
+    zebrafish: "{resource_dir}/UCE/protein_embeddings/Danio_rerio.GRCz11.gene_symbol_to_embedding_ESM2.pt"
+    mouse_lemur: "{resource_dir}/UCE/protein_embeddings/Microcebus_murinus.Mmur_3.0.gene_symbol_to_embedding_ESM2.pt"
+    pig: "{resource_dir}/UCE/protein_embeddings/Sus_scrofa.Sscrofa11.1.gene_symbol_to_embedding_ESM2.pt"
+    macaca_fascicularis: "{resource_dir}/UCE/protein_embeddings/Macaca_fascicularis.Macaca_fascicularis_6.0.gene_symbol_to_embedding_ESM2.pt"
+    macaca_mulatta: "{resource_dir}/UCE/protein_embeddings/Macaca_mulatta.Mmul_10.gene_symbol_to_embedding_ESM2.pt"

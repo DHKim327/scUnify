@@ -1,0 +1,24 @@
+# Nicheformer — model-specific configuration
+# Shared by both inference and training configs.
+
+model_name: Nicheformer
+
+preprocessing:
+  use_raw_counts: true
+
+inference:
+  seed: 0
+  batch_size: 32
+  num_workers: 0
+  emb_layer: -1
+  species: human
+  assay: 10x_3v3
+  modality: dissociated
+  max_seq_len: 4096
+  context_length: 1500
+  ensembl_key: null
+
+resources:
+  model_dir: "{resource_dir}/Nicheformer/model"
+  gene_ref_file: "{resource_dir}/Nicheformer/model/model.h5ad"
+  technology_mean_file: "{resource_dir}/Nicheformer/model_means/dissociated_mean_script.npy"
