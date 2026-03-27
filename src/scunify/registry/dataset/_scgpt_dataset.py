@@ -9,6 +9,11 @@ from ..models.modules.scgpt.gene_tokenizer import GeneVocab
 
 class ScGPTDataset(Dataset):
     def __init__(self, adata, config):
+        # Seed RNG to match Foundation behaviour (set_seed before embed_data)
+        seed = config.inference.get('seed', 0)
+        np.random.seed(seed)
+        torch.manual_seed(seed)
+
         preproc = Preprocessor(
             use_key="X",
             filter_gene_by_counts=config.preprocessing["filter_gene_by_counts"],
@@ -19,8 +24,10 @@ class ScGPTDataset(Dataset):
         )
         adata, gene_ids, vocab = preproc.tokenization(config, adata)
 
-        self.count_matrix = adata.X.toarray() if issparse(adata.X) else adata.X
+        # Lazy: keep sparse reference, defer dense conversion to __getitem__
+        self.X = adata.X
         self.gene_ids = gene_ids
+        self.n_cells = adata.n_obs
 
         # Requirements
         model_param = load_yaml(config._architecture_dir)
@@ -36,15 +43,18 @@ class ScGPTDataset(Dataset):
             max_length=1200,
             sampling=True,
             keep_first_n_tokens=1,
-            seed=config.inference.get('seed', 42)
         )
         self.sampler = SequentialSampler(self)
 
     def __len__(self):
-        return len(self.count_matrix)
+        return self.n_cells
 
     def __getitem__(self, idx):
-        row = self.count_matrix[idx]
+        row = self.X[idx]
+        if issparse(row):
+            row = row.toarray().ravel()
+        else:
+            row = np.asarray(row).ravel()
         nonzero_idx = np.nonzero(row)[0]
         values = row[nonzero_idx]
         genes = self.gene_ids[nonzero_idx]
@@ -260,7 +270,6 @@ class DataCollator:
     max_length: int | None = None
     sampling: bool = True
     keep_first_n_tokens: int = 1
-    seed: int = 0  # for reproducibility
 
     def __post_init__(self):
         if self.do_padding:
@@ -274,10 +283,6 @@ class DataCollator:
 
         if self.keep_first_n_tokens < 0 or self.keep_first_n_tokens > self.max_length:
             raise ValueError(f"`keep_first_n_tokens` must be between 0 and `max_length` ({self.max_length}).")
-        
-        # Generator for reproducible sampling
-        self.generator = torch.Generator()
-        self.generator.manual_seed(self.seed)
 
     def __call__(self, examples: list[dict[str, torch.Tensor]]) -> dict[str, torch.Tensor]:
         """
@@ -387,15 +392,12 @@ class DataCollator:
         # and expressions, although it is probably a nice argmentation.
         device = genes.device
         if self.keep_first_n_tokens == 0:
-            # Use generator for reproducibility (CPU only), then move to device
-            indices = torch.randperm(len(genes), generator=self.generator)[:max_length]
-            indices = indices.to(device)
+            indices = torch.randperm(len(genes), device=device)[:max_length]
             return genes[indices], expressions[indices]
 
         # keep the first n tokens unchanged
         _n = self.keep_first_n_tokens
-        indices = torch.randperm(len(genes) - _n, generator=self.generator)[: max_length - _n]
-        indices = indices.to(device)
+        indices = torch.randperm(len(genes) - _n, device=device)[: max_length - _n]
         indices = torch.cat([torch.arange(_n, device=device), indices + _n], dim=0)
         return genes[indices], expressions[indices]
 
@@ -431,36 +433,12 @@ class DataCollator:
         return genes, expressions
 
 
-# Global RandomState for reproducible binning
-_BINNING_RNG = np.random.RandomState(42)
-
-
-def _digitize(x: np.ndarray, bins: np.ndarray, side="both", rng=None) -> np.ndarray:
+def _digitize(x: np.ndarray, bins: np.ndarray, side="both") -> np.ndarray:
     """
     Digitize the data into bins. This method spreads data uniformly when bins
-    have same values.
-
-    Args:
-
-    x (:class:`np.ndarray`):
-        The data to digitize.
-    bins (:class:`np.ndarray`):
-        The bins to use for digitization, in increasing order.
-    side (:class:`str`, optional):
-        The side to use for digitization. If "one", the left side is used. If
-        "both", the left and right side are used. Default to "one".
-    rng (:class:`np.random.RandomState`, optional):
-        Random number generator for reproducibility. If None, uses default RandomState(42).
-
-    Returns
-    -------
-    :class:`np.ndarray`:
-        The digitized data.
+    have same values. Identical to Foundation scGPT preprocess.py.
     """
     assert x.ndim == 1 and bins.ndim == 1
-
-    if rng is None:
-        rng = _BINNING_RNG  # use fixed seed RandomState for reproducibility
 
     left_digits = np.digitize(x, bins)
     if side == "one":
@@ -468,7 +446,7 @@ def _digitize(x: np.ndarray, bins: np.ndarray, side="both", rng=None) -> np.ndar
 
     right_difits = np.digitize(x, bins, right=True)
 
-    rands = rng.rand(len(x))  # uniform random numbers
+    rands = np.random.rand(len(x))  # global state (Foundation-identical)
 
     digits = rands * (right_difits - left_digits) + left_digits
     digits = np.ceil(digits).astype(np.int64)

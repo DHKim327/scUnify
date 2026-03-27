@@ -137,55 +137,92 @@ class BaseTrainer(ABC):
         )
 
     # ------------------------------------------------------------------ #
-    #  Post-training embedding extraction
+    #  Post-training embedding extraction (distributed)
     # ------------------------------------------------------------------ #
     @abstractmethod
-    def extract_embeddings(self, model: nn.Module, adata) -> np.ndarray:
-        """Extract embeddings using LoRA-adapted model (eval mode).
-
-        Uses registry's inference dataset (no masking) but the training
-        wrapper in labels=None mode.
-        """
+    def _build_inference_dataset(self, adata):
+        """Build inference dataset (no masking) for embedding extraction."""
         ...
+
+    @abstractmethod
+    def forward_embed_step(
+        self, model: nn.Module, batch: dict
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Single-batch embedding extraction. Returns (embedding, cid)."""
+        ...
+
+    def extract_embeddings(
+        self, model: nn.Module, adata, accelerator
+    ) -> np.ndarray | None:
+        """Distributed embedding extraction — mirrors inference_loop pattern.
+
+        Uses ``accelerator.prepare(dl)`` for DistributedSampler and
+        ``accelerator.gather_for_metrics`` for cross-GPU collection.
+
+        Returns numpy array on main process, ``None`` on other ranks.
+        """
+        ds = self._build_inference_dataset(adata)
+        dl = self.build_dataloader(ds, shuffle=False, drop_last=False)
+        dl = accelerator.prepare(dl)
+
+        emb_chunks: list[torch.Tensor] = []
+        cid_chunks: list[torch.Tensor] = []
+
+        with torch.no_grad():
+            for batch in dl:
+                emb, cid = self.forward_embed_step(model, batch)
+                gemb = accelerator.gather_for_metrics(emb)
+                gcid = accelerator.gather_for_metrics(cid)
+                emb_chunks.append(gemb.cpu())
+                cid_chunks.append(gcid.cpu())
+
+        if accelerator.is_main_process and emb_chunks:
+            E = torch.cat(emb_chunks, dim=0)
+            C = torch.cat(cid_chunks, dim=0).long()
+            order = torch.argsort(C, stable=True)
+            return E[order].float().numpy()
+        return None
 
     # ------------------------------------------------------------------ #
     #  Checkpoint save / load / merge
     # ------------------------------------------------------------------ #
-    _uses_hf_peft: bool = False
-
     def save_checkpoint(self, model: nn.Module, output_dir: str | Path) -> Path:
-        """Save LoRA weights only (not full backbone)."""
+        """Save LoRA adapter weights only (via HF PEFT ``save_pretrained``)."""
         ckpt_dir = Path(output_dir) / "checkpoints" / self.cfg.task_name
         ckpt_dir.mkdir(parents=True, exist_ok=True)
-
-        if self._uses_hf_peft:
-            model.model.save_pretrained(ckpt_dir)
-        else:
-            lora_state = {
-                k: v for k, v in model.state_dict().items() if "lora_" in k
-            }
-            torch.save(lora_state, ckpt_dir / "lora_weights.pt")
+        model.model.save_pretrained(ckpt_dir)
         return ckpt_dir
 
     def merge_and_save(self, model: nn.Module, output_dir: str | Path) -> Path:
         """Merge LoRA into base weights and save as a standard model.
 
+        1. ``merge_and_unload()`` — merge PEFT adapters into base weights.
+        2. ``refuse_mha_layers()`` — re-fuse any unfused QKV back to
+           ``nn.MultiheadAttention`` (no-op for models that were never unfused).
+        3. Save — ``save_pretrained`` for HF models, ``torch.save`` for others.
+
         The merged model can be loaded by the existing inferencer/ pipeline
         without any code changes — just point config model_dirs to this path.
-
-        Also generates an inference config yaml with the merged model path
-        so the user can run inference immediately without manual config editing.
         """
+        from ..lora._unfused_mha import refuse_mha_layers
+
         merged_dir = Path(output_dir) / "merged" / self.cfg.task_name
         merged_dir.mkdir(parents=True, exist_ok=True)
 
-        if self._uses_hf_peft:
-            merged = model.model.merge_and_unload()
+        # Step 1: Merge LoRA adapters into base weights
+        merged = model.model.merge_and_unload()
+
+        # Step 2: Re-fuse unfused attention (no-op if none found)
+        refuse_mha_layers(merged)
+
+        # Step 3: Save
+        if hasattr(merged, "save_pretrained"):
             merged.save_pretrained(merged_dir)
         else:
-            # For custom LoRA: merge lora_A @ lora_B into original weight
-            # and save full state_dict
-            torch.save(model.state_dict(), merged_dir / "merged_model.pt")
+            torch.save(
+                merged.state_dict(),
+                merged_dir / "merged_model.pt",
+            )
 
         self._generate_inference_config(merged_dir, output_dir)
         return merged_dir

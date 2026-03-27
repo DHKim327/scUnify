@@ -47,6 +47,7 @@ class GeneformerDataset(Dataset):
 
         self.cls_token_id = gene_token_dict["<cls>"]
         self.eos_token_id = gene_token_dict["<eos>"]
+        self.mask_token_id = gene_token_dict.get("<mask>", None)
 
         model_input_size = config.get("model_input_size", 4096)
 
@@ -88,32 +89,21 @@ class GeneformerDataset(Dataset):
         if n_duplicates > 0:
             logger.info(f"Collapsing {n_duplicates} duplicate canonical IDs by summing counts")
 
-        # Get n_counts for normalization
+        # Get n_counts for normalization (sparse row sum — fast even for 1M cells)
         if "n_counts" in adata.obs.columns:
             self.n_counts = adata.obs["n_counts"].values.astype(np.float64)
         else:
-            # Compute n_counts from raw data
             X = adata.X
             if issparse(X):
                 self.n_counts = np.asarray(X.sum(axis=1)).flatten().astype(np.float64)
             else:
                 self.n_counts = X.sum(axis=1).astype(np.float64)
 
-        # Extract valid gene columns and collapse duplicates by summing
-        X = adata.X
-        if issparse(X):
-            valid_X = X[:, valid_indices].toarray().astype(np.float64)
-        else:
-            valid_X = np.asarray(X[:, valid_indices], dtype=np.float64)
-
-        # Always collapse via inverse_indices to ensure column order matches
-        # unique_canonical_ids (np.unique sorts alphabetically)
-        n_unique = len(unique_canonical_ids)
-        collapsed_X = np.zeros((adata.n_obs, n_unique), dtype=np.float64)
-        for i in range(n_unique):
-            cols = np.where(inverse_indices == i)[0]
-            collapsed_X[:, i] = valid_X[:, cols].sum(axis=1)
-        self.count_matrix = collapsed_X
+        # ── Lazy strategy: keep X sparse, defer per-cell processing to __getitem__
+        self.X = adata.X  # keep sparse reference (no .toarray())
+        self.valid_indices = valid_indices
+        self.inverse_indices = inverse_indices
+        self.n_unique = len(unique_canonical_ids)
 
         # Precompute arrays for unique canonical genes
         self.norm_factor_vector = np.array([gene_median_dict[cid] for cid in unique_canonical_ids])
@@ -127,7 +117,18 @@ class GeneformerDataset(Dataset):
         return self.n_cells
 
     def __getitem__(self, idx):
-        raw_counts = self.count_matrix[idx]
+        # ── Per-cell: sparse row → collapse duplicates → normalize → rank ──
+        row = self.X[idx, self.valid_indices]
+        if issparse(row):
+            row = row.toarray().ravel().astype(np.float64)
+        else:
+            row = np.asarray(row, dtype=np.float64).ravel()
+
+        # Collapse duplicate canonical IDs (same as eager: sum columns with same ID)
+        raw_counts = np.bincount(
+            self.inverse_indices, weights=row, minlength=self.n_unique
+        )
+
         n_counts = self.n_counts[idx]
 
         # Normalize: counts / n_counts * 10000

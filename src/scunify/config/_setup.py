@@ -194,7 +194,7 @@ def _create_system_conda_envs(models: list[str]):
             ], check=True)
             
             print(f"    ✅ scunify[core] installed in editable mode!")
-            
+
         except subprocess.CalledProcessError as e:
             print(f"    ❌ Failed to create {env_name}: {e}")
         except Exception as e:

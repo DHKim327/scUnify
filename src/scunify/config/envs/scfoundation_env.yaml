@@ -10,7 +10,10 @@ dependencies:
   - einops>=0.8
   - pip
   - pip:
-      - torch>=2.0.0             # pip (CUDA 자동 감지)
+      - --index-url https://download.pytorch.org/whl/cu128
+      - --extra-index-url https://pypi.org/simple
+      - torch>=2.0.0
       # scunify[core]는 _setup.py에서 editable로 설치!
       - local-attention==1.11.2
       - accelerate>=1
+      - peft==0.14.0

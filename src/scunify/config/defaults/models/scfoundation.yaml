@@ -15,6 +15,10 @@ inference:
   batch_size: 1
   num_workers: 0
 
+training:
+  mae:
+    mask_ratio: 0.4
+
 resources:
   model_file: "{resource_dir}/scFoundation/models.ckpt"
   gene_list: "{resource_dir}/scFoundation/OS_scRNA_gene_index.19264.tsv"

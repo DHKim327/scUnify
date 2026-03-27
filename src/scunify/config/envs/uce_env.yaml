@@ -10,5 +10,8 @@ dependencies:
   - tqdm>=4.60
   - pip
   - pip:
-      - torch>=2.0             # pip (CUDA 자동 감지)
+      - --index-url https://download.pytorch.org/whl/cu128
+      - --extra-index-url https://pypi.org/simple
+      - torch>=2.0
       - accelerate>=0.24
+      - peft==0.14.0

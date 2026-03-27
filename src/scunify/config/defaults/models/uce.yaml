@@ -16,6 +16,11 @@ inference:
   batch_size: 25
   num_workers: 0
 
+training:
+  bep:
+    n_pos_targets: 100
+    n_neg_targets: 100
+
 resources:
   spec_chrom_csv_path: "{resource_dir}/UCE/species_chrom.csv"
   token_file: "{resource_dir}/UCE/all_tokens.torch"

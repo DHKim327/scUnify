@@ -1,32 +1,33 @@
-"""Geneformer LoRA trainer — Phase 1 implementation.
+"""Nicheformer LoRA trainer — HF PEFT (QKV unfused before injection).
 
-Uses HF PEFT for LoRA injection (separate Q/K/V Linears).
-MLM loss via BertForMaskedLM built-in head.
+MLM loss via Nicheformer's built-in ``classifier_head``.
 """
+
+from pathlib import Path
 
 import torch
 import torch.nn as nn
 
 from .base._basetrainer import BaseTrainer
-from .dataset._geneformer_dataset import GeneformerTrainingDataset
+from .dataset._nicheformer_dataset import NicheformerTrainingDataset
 from .lora._injection import inject_lora_to_model
-from .models._geneformer_wrapper import GeneformerTrainingWrapper
+from .models._nicheformer_wrapper import NicheformerTrainingWrapper
 
 
-class GeneformerTrainer(BaseTrainer):
-    """LoRA trainer for Geneformer (BertForMaskedLM)."""
+class NicheformerTrainer(BaseTrainer):
+    """LoRA trainer for Nicheformer (fused QKV, unfused before PEFT)."""
 
     def build_dataset(self, adata):
-        return GeneformerTrainingDataset(adata, self.cfg)
+        return NicheformerTrainingDataset(adata, self.cfg)
 
     def build_model(self):
-        return GeneformerTrainingWrapper(self.cfg)
+        return NicheformerTrainingWrapper(self.cfg)
 
     def inject_lora(self, model: nn.Module) -> nn.Module:
-        return inject_lora_to_model(model, "geneformer", self.lora_cfg)
+        return inject_lora_to_model(model, "nicheformer", self.lora_cfg)
 
     def compute_loss(self, model: nn.Module, batch: dict) -> torch.Tensor:
-        """MLM loss — BertForMaskedLM computes CrossEntropyLoss internally."""
+        """MLM loss — Nicheformer's classifier_head predicts masked tokens."""
         return model(
             input_ids=batch["input_ids"],
             attention_mask=batch["attention_mask"],
@@ -35,9 +36,9 @@ class GeneformerTrainer(BaseTrainer):
 
     def _build_inference_dataset(self, adata):
         """Inference dataset (no MLM masking) for embedding extraction."""
-        from ..registry.dataset import GeneformerDataset
+        from ..registry.dataset import NicheformerDataset
 
-        return GeneformerDataset(adata, self.cfg)
+        return NicheformerDataset(adata, self.cfg)
 
     def forward_embed_step(self, model, batch):
         """Single-batch embedding. labels=None → embedding mode."""

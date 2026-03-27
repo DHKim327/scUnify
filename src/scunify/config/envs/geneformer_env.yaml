@@ -9,9 +9,11 @@ dependencies:
   - scanpy>=1.9
   - pip
   - pip:
+      - --index-url https://download.pytorch.org/whl/cu128
+      - --extra-index-url https://pypi.org/simple
       - torch>=2.0.1
       - transformers==4.46
       - datasets>=2.12
       - anndata>=0.9
       - accelerate>=1
-      - peft>=0.7.0
+      - peft==0.14.0

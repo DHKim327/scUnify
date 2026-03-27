@@ -1,6 +1,6 @@
 from ..registry.dataset import UCEDataset
-from ..registry.models import UCEWrapper
 from .base._baseinferencer import BaseInferencer
+from .models import UCEInferenceWrapper
 
 
 class UCEInferencer(BaseInferencer):
@@ -8,7 +8,7 @@ class UCEInferencer(BaseInferencer):
         return UCEDataset(adata, self.cfg)
 
     def build_model(self):
-        return UCEWrapper(self.cfg)
+        return UCEInferenceWrapper(self.cfg)
 
     def forward_step(self, model, batch):
         batch_sentences, mask, cid, _ = batch

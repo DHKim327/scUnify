@@ -15,6 +15,10 @@ inference:
   batch_size: 64
   num_workers: 0
 
+training:
+  gep:
+    mask_prob: 0.15
+
 resources:
   model_file: "{resource_dir}/scGPT/best_model.pt"
   vocab_file: "{resource_dir}/scGPT/vocab.json"

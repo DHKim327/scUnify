@@ -3,31 +3,15 @@ import torch.nn as nn
 
 
 class ScFoundationWrapper(nn.Module):
+    """Base wrapper for scFoundation — full MaeAutobin loading, no forward.
+
+    Keeps the complete model (encoder + decoder + to_final) so that both
+    inference (encoder-only) and training (full MAE) wrappers can inherit.
+    """
+
     def __init__(self, config):
         super(ScFoundationWrapper, self).__init__()
-        model = load(config)
-        self.token_emb = model.token_emb
-        self.pos_emb = model.pos_emb
-        self.encoder = model.encoder
-        self.pool_type = config.inference["pool_type"]
-
-    def forward(self, x, x_padding, position_gene_ids):
-        x = torch.unsqueeze(x, 2)
-        x = self.token_emb(x, output_weight=0)
-        position_emb = self.pos_emb(position_gene_ids)
-        x += position_emb
-        geneemb = self.encoder(x, x_padding)
-        if self.pool_type == "all":
-            geneemb1 = geneemb[:, -1, :]
-            geneemb2 = geneemb[:, -2, :]
-            geneemb3, _ = torch.max(geneemb[:, :-2, :], dim=1)
-            geneemb4 = torch.mean(geneemb[:, :-2, :], dim=1)
-            geneembmerge = torch.cat([geneemb1, geneemb2, geneemb3, geneemb4], axis=1)
-        elif self.pool_type == "max":
-            geneembmerge, _ = torch.max(geneemb, dim=1)
-        else:
-            raise ValueError("pool_type must be all or max")
-        return geneembmerge
+        self.model = load(config)
 
 
 # -------------------------------- Load model utils --------------------------------#

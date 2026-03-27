@@ -1,6 +1,6 @@
 from ..registry.dataset import ScGPTDataset
-from ..registry.models import ScGPTWrapper
 from .base._baseinferencer import BaseInferencer
+from .models import ScGPTInferenceWrapper
 
 
 class ScGPTInferencer(BaseInferencer):
@@ -8,7 +8,7 @@ class ScGPTInferencer(BaseInferencer):
         return ScGPTDataset(adata, self.cfg)
 
     def build_model(self):
-        return ScGPTWrapper(self.cfg)
+        return ScGPTInferenceWrapper(self.cfg)
 
     def forward_step(self, model, batch):
         input_gene_ids = batch["gene"]

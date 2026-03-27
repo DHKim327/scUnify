@@ -1,99 +1,79 @@
-"""Model-specific LoRA target module name mappings.
+"""Model-specific LoRA target module name mappings — HF PEFT unified.
 
-Maps abstract target names (``"query"``, ``"value"``, ``"ffn"``) to actual
-PyTorch module paths used by each foundation model.
+Maps abstract target names (``"query"``, ``"value"``, ``"ffn"``) to
+HF PEFT ``target_modules`` strings for each foundation model.
 
 Notes:
-    - Geneformer: separate Q/K/V Linears → HF PEFT natively supported.
-    - scGPT / scFoundation / UCE / Nicheformer: fused QKV (in_proj_weight)
-      → requires custom MergedLinear (not yet implemented).
-    - Module names marked with ``{}``: layer index placeholder.
-    - Module names need verification via ``model.named_modules()`` for
-      scGPT and Nicheformer.
+    - Geneformer: separate Q/K/V Linears → native HF PEFT.
+    - Others: fused QKV → unfused to q_proj/k_proj/v_proj before PEFT.
+    - PEFT matches by module name suffix (e.g. ``"q_proj"``).
 """
 
 from __future__ import annotations
 
 # ------------------------------------------------------------------ #
-#  Full module-path map (for reference / future custom injection)
+#  PEFT target module mappings (all models)
 # ------------------------------------------------------------------ #
-LORA_TARGET_MAP: dict[str, dict[str, str]] = {
-    "geneformer": {
-        "query": "bert.encoder.layer.{}.attention.self.query",
-        "key": "bert.encoder.layer.{}.attention.self.key",
-        "value": "bert.encoder.layer.{}.attention.self.value",
-        "attn_out": "bert.encoder.layer.{}.attention.output.dense",
-        "ffn_up": "bert.encoder.layer.{}.intermediate.dense",
-        "ffn_down": "bert.encoder.layer.{}.output.dense",
-    },
-    "scgpt": {
-        "qkv_fused": "encoder.layers.{}.self_attn.Wqkv",
-        "attn_out": "encoder.layers.{}.self_attn.out_proj",
-        "ffn_up": "encoder.layers.{}.ffn.W1",
-        "ffn_down": "encoder.layers.{}.ffn.W2",
-    },
-    "scfoundation": {
-        "qkv_fused": "encoder.layers.{}.self_attn",
-        "attn_out": "encoder.layers.{}.self_attn.out_proj",
-        "ffn_up": "encoder.layers.{}.linear1",
-        "ffn_down": "encoder.layers.{}.linear2",
-    },
-    "uce": {
-        "qkv_fused": "transformer_encoder.layers.{}.self_attn",
-        "attn_out": "transformer_encoder.layers.{}.self_attn.out_proj",
-        "ffn_up": "transformer_encoder.layers.{}.linear1",
-        "ffn_down": "transformer_encoder.layers.{}.linear2",
-    },
-    "nicheformer": {
-        "qkv_fused": "encoder.layers.{}.self_attn",
-        "attn_out": "encoder.layers.{}.self_attn.out_proj",
-        "ffn_up": "encoder.layers.{}.linear1",
-        "ffn_down": "encoder.layers.{}.linear2",
-    },
-}
 
-# ------------------------------------------------------------------ #
-#  HF PEFT target resolution (Geneformer only for now)
-# ------------------------------------------------------------------ #
-# Maps user-friendly target names → HF PEFT target_modules strings
-# HF PEFT matches by suffix, so "query" matches all layers automatically.
-_HF_PEFT_MAP: dict[str, list[str]] = {
+# Geneformer: native HF structure (BertForMaskedLM)
+_GENEFORMER_TARGETS = {
     "query": ["query"],
     "key": ["key"],
     "value": ["value"],
     "attn_out": ["attention.output.dense"],
     "ffn": ["intermediate.dense", "output.dense"],
+    "ffn_up": ["intermediate.dense"],
+    "ffn_down": ["output.dense"],
+}
+
+# Unfused fused-QKV models: after UnfusedMultiheadAttention replacement
+# Applies to: Nicheformer, scFoundation, scGPT, UCE
+_UNFUSED_TARGETS = {
+    "query": ["q_proj"],
+    "key": ["k_proj"],
+    "value": ["v_proj"],
+    "attn_out": ["out_proj"],
+    "ffn": ["linear1", "linear2"],
+    "ffn_up": ["linear1"],
+    "ffn_down": ["linear2"],
+}
+
+_PEFT_TARGET_MAP: dict[str, dict[str, list[str]]] = {
+    "geneformer": _GENEFORMER_TARGETS,
+    "nicheformer": _UNFUSED_TARGETS,
+    "scfoundation": _UNFUSED_TARGETS,
+    "scgpt": _UNFUSED_TARGETS,
+    "uce": _UNFUSED_TARGETS,
 }
 
 
-def resolve_hf_peft_targets(model_name: str, targets: list[str]) -> list[str]:
+def resolve_peft_targets(model_name: str, targets: list[str]) -> list[str]:
     """Convert abstract target names to HF PEFT ``target_modules`` list.
 
     Args:
-        model_name: Model identifier (currently only ``"geneformer"``).
-        targets: List of abstract names, e.g. ``["query", "value", "ffn"]``.
+        model_name: Model identifier (e.g. ``"geneformer"``, ``"uce"``).
+        targets: List of abstract names, e.g. ``["query", "value"]``.
 
     Returns:
         Deduplicated list of HF PEFT target module name suffixes.
-
-    Raises:
-        ValueError: If model is not supported for HF PEFT or target unknown.
     """
-    if model_name.lower() != "geneformer":
+    name = model_name.lower()
+    target_map = _PEFT_TARGET_MAP.get(name)
+    if target_map is None:
         raise ValueError(
-            f"HF PEFT target resolution only supports Geneformer. "
-            f"Got: {model_name!r}"
+            f"Unknown model {model_name!r}. "
+            f"Available: {sorted(_PEFT_TARGET_MAP.keys())}"
         )
 
     modules: list[str] = []
     for t in targets:
         t_lower = t.lower()
-        if t_lower not in _HF_PEFT_MAP:
+        if t_lower not in target_map:
             raise ValueError(
-                f"Unknown target {t!r}. "
-                f"Available: {list(_HF_PEFT_MAP.keys())}"
+                f"Unknown target {t!r} for {model_name}. "
+                f"Available: {sorted(target_map.keys())}"
             )
-        modules.extend(_HF_PEFT_MAP[t_lower])
+        modules.extend(target_map[t_lower])
 
     # Deduplicate while preserving order
     seen: set[str] = set()
@@ -103,3 +83,15 @@ def resolve_hf_peft_targets(model_name: str, targets: list[str]) -> list[str]:
             seen.add(m)
             result.append(m)
     return result
+
+
+# ------------------------------------------------------------------ #
+#  layers_pattern for PEFT layer selection
+# ------------------------------------------------------------------ #
+LAYERS_PATTERN: dict[str, str] = {
+    "geneformer": "layer",                # bert.encoder.layer.{i}
+    "nicheformer": "layers",              # encoder.layers.{i}
+    "scfoundation": "transformer_encoder",  # encoder.transformer_encoder.{i}
+    "scgpt": "layers",                    # encoder.layers.{i}
+    "uce": "layers",                      # transformer_encoder.layers.{i}
+}

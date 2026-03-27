@@ -4,17 +4,20 @@
 Parallel structure to ``inference_loop.py`` — same config/seed/GPU setup,
 but runs epoch-based training with LoRA + gradient accumulation.
 
-Flow (2026-03-20):
-  1. Split adata → train / valid / test
-  2. Train on train split
-  3. Validate each epoch → early stopping
-  4. Checkpoint + merge
-  5. Extract embeddings per split → concat → save
+Supports two split modes:
+  - single split (column_key / random): one train/valid/test cycle
+  - kfold: held-out test + N folds, fresh model per fold
+
+Flow:
+  1. Split adata → test + folds (or train/valid/test)
+  2. Per fold: build model → LoRA → train → validate → checkpoint → embeddings
+  3. Save per-fold outputs (fold_N/adata.h5ad style)
 """
 
 import logging
 import os
 
+import numpy as np
 import ray
 import torch
 from accelerate import Accelerator, DistributedDataParallelKwargs
@@ -41,71 +44,36 @@ def _compute_val_loss(model, trainer, valid_dl, accelerator):
     return total_loss / max(n_batches, 1)
 
 
-def training_loop_per_worker(training_loop_config):
-    """Training loop per worker. Mirrors ``inference_loop_per_worker``.
+def _train_one_fold(
+    *,
+    trainer,
+    train_adata,
+    valid_adata,
+    accelerator,
+    training_cfg,
+    cfg,
+    progress,
+    task_name,
+    local_rank,
+    actual_gpu_id,
+    fold_label,
+    timer,
+):
+    """Train a single fold (or the single split). Returns per-fold results dict.
 
-    Expected inputs (training_loop_config):
-      - "cfg": ScUnifyConfig with ``training`` section
-      - "progress_actor": TrainingProgressActor
+    This is the inner training loop extracted so it can be called once (single
+    split) or N times (kfold) with a fresh model each time.
     """
-    # --------- Config / Seed ---------
-    cfg = training_loop_config.get("cfg")
-
-    import random
-
-    import numpy as np
-
-    training_cfg = cfg.get("training", {})
-    seed = training_cfg.get("seed", 42)
-    random.seed(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(seed)
-        torch.backends.cudnn.deterministic = True
-        torch.backends.cudnn.benchmark = False
-
-    if torch.cuda.is_available():
-        local_rank = int(os.environ.get("LOCAL_RANK", "0"))
-        torch.cuda.set_device(local_rank)
-
-    progress = training_loop_config.get("progress_actor")
-
-    # --------- Timer ---------
-    timer = TimeLogger()
-    timer.start("total")
-    t_load_d = float(getattr(cfg, "t_load_d", 0.0))
-
-    # --------- Resolve Trainer ---------
-    TrainerCls = resolve_trainer(cfg)
-
-    # --------- Accelerator (DDP + LoRA: find_unused_parameters) ---------
-    acc_kwargs = cfg.get("accelerate", {}) or {}
-    ddp_kwargs = DistributedDataParallelKwargs(find_unused_parameters=True)
-    accelerator = Accelerator(kwargs_handlers=[ddp_kwargs], **acc_kwargs)
-
-    # --------- Load adata + Split ---------
-    adata = ray.get(cfg.get("adata_ref"))
-    trainer = TrainerCls(cfg)
-
-    split_cfg = training_cfg.get("split", {})
-    splitter = DataSplitter(split_cfg)
-    train_adata, valid_adata, test_adata = splitter.split(adata)
-
     # --------- Build datasets + dataloaders ---------
-    timer.start("load(d)")
     train_ds = trainer.build_dataset(train_adata)
     train_dl = trainer.build_dataloader(train_ds)
 
     valid_ds = trainer.build_dataset(valid_adata)
     valid_dl = trainer.build_dataloader(valid_ds, shuffle=False, drop_last=False)
-    t_load_ds = timer.stop("load(d)")
 
-    # --------- Build model + LoRA ---------
-    timer.start("load(m)")
+    # --------- Fresh model + LoRA per fold ---------
     model = trainer.build_model()
     model = trainer.inject_lora(model)
-    t_load_m = timer.stop("load(m)")
 
     # --------- Optimizer & Scheduler ---------
     epochs = int(training_cfg.get("epochs", 50))
@@ -128,29 +96,9 @@ def training_loop_per_worker(training_loop_config):
         min_delta=float(es_cfg.get("min_delta", 0.0)),
     )
 
-    # --------- GPU / Progress setup ---------
-    visible = os.environ.get("CUDA_VISIBLE_DEVICES", "")
-    gpu_map = (
-        [int(x) for x in visible.split(",")]
-        if visible
-        else list(range(torch.cuda.device_count()))
-    )
-    actual_gpu_id = (
-        gpu_map[local_rank] if local_rank < len(gpu_map) else local_rank
-    )
-    monitor = GPUMonitor(actual_gpu_id, interval=0.5)
-
-    task_name = cfg.get("task_name")
+    # --------- Training ---------
     bs = int(training_cfg.get("batch_size", 32))
     total_batches = len(train_dl)
-
-    ray.get(
-        progress.set_status.remote(task_name, local_rank, "STARTING")
-    )
-
-    # --------- Training ---------
-    monitor.start()
-    timer.start("train")
     model.train()
 
     total_params = sum(p.numel() for p in model.parameters())
@@ -187,6 +135,7 @@ def training_loop_per_worker(training_loop_config):
                 epoch=epoch,
                 total_epochs=epochs,
                 loss=loss.item() * grad_accum,
+                fold=fold_label or None,
             )
 
         avg_loss = epoch_loss / max(total_batches, 1)
@@ -196,7 +145,6 @@ def training_loop_per_worker(training_loop_config):
             model, trainer, valid_dl, accelerator
         )
 
-        # Report val_loss to progress UI
         progress.update.remote(
             task_name,
             accelerator.process_index,
@@ -208,127 +156,334 @@ def training_loop_per_worker(training_loop_config):
             total_epochs=epochs,
             loss=avg_loss,
             val_loss=val_loss,
+            fold=fold_label or None,
         )
 
         logger.info(
-            f"[{task_name}] Epoch {epoch + 1}/{epochs} | "
+            f"[{task_name}] {fold_label} Epoch {epoch + 1}/{epochs} | "
             f"Loss: {avg_loss:.4f} | Val Loss: {val_loss:.4f}"
         )
         ray_train.report(
-            {"epoch": epoch, "loss": avg_loss, "val_loss": val_loss}
+            {
+                "fold": fold_label,
+                "epoch": epoch,
+                "loss": avg_loss,
+                "val_loss": val_loss,
+            }
         )
 
-        # --------- Early Stopping Check ---------
         if early_stopper.step(val_loss, epoch):
             logger.info(
-                f"[{task_name}] Early stopping at epoch {epoch + 1}"
+                f"[{task_name}] {fold_label} Early stopping at epoch {epoch + 1}"
             )
             break
 
-    t_train = timer.stop("train")
     accelerator.wait_for_everyone()
 
     # --------- Checkpoint + Merge ---------
     if accelerator.is_main_process:
         unwrapped = accelerator.unwrap_model(model)
-        ckpt_dir = trainer.save_checkpoint(unwrapped, cfg.save_dir)
-        merged_dir = trainer.merge_and_save(unwrapped, cfg.save_dir)
-        logger.info(f"[{task_name}] Checkpoint: {ckpt_dir}")
-        logger.info(f"[{task_name}] Merged model: {merged_dir}")
-        logger.info(
-            f"[{task_name}] Inference config: "
-            f"{cfg.save_dir / f'{task_name}_inference.yaml'}"
+        if fold_label:
+            fold_save_dir = cfg.save_dir / fold_label
+            fold_save_dir.mkdir(parents=True, exist_ok=True)
+        else:
+            fold_save_dir = cfg.save_dir
+        if training_cfg.get("save_checkpoint", True):
+            ckpt_dir = trainer.save_checkpoint(unwrapped, fold_save_dir)
+            merged_dir = trainer.merge_and_save(unwrapped, fold_save_dir)
+            logger.info(f"[{task_name}] {fold_label or 'single'} Checkpoint: {ckpt_dir}")
+            logger.info(f"[{task_name}] {fold_label or 'single'} Merged: {merged_dir}")
+
+    return {
+        "model": model,
+        "accelerator": accelerator,
+        "actual_epochs": actual_epochs,
+        "avg_loss": avg_loss,
+        "val_loss": val_loss,
+        "early_stopper": early_stopper,
+        "train_params": train_params,
+        "total_params": total_params,
+    }
+
+
+def _extract_and_save_embeddings(
+    *,
+    trainer,
+    model,
+    accelerator,
+    train_adata,
+    valid_adata,
+    test_adata,
+    cfg,
+    task_name,
+    fold_label,
+    fold_results,
+    timer,
+):
+    """Extract embeddings per split, reassemble in original cell order, and save."""
+    model.eval()
+    timer.start(f"embed_{fold_label}")
+
+    unwrapped_model = accelerator.unwrap_model(model)
+    split_embeddings = {}
+
+    for split_name, split_adata in [
+        ("train", train_adata),
+        ("valid", valid_adata),
+        ("test", test_adata),
+    ]:
+        emb = trainer.extract_embeddings(
+            unwrapped_model, split_adata, accelerator
+        )
+        if emb is not None:
+            split_embeddings[split_name] = emb
+            logger.info(
+                f"[{task_name}] {fold_label} {split_name} embeddings: {emb.shape}"
+            )
+
+    t_embed = timer.stop(f"embed_{fold_label}")
+
+    if not accelerator.is_main_process or not split_embeddings:
+        return 0, 0, t_embed
+
+    # Collect embeddings + orig indices + labels per split
+    emb_parts = []
+    idx_parts = []
+    label_parts = []
+    for s_name, s_adata in [
+        ("train", train_adata),
+        ("valid", valid_adata),
+        ("test", test_adata),
+    ]:
+        if s_name in split_embeddings:
+            emb_parts.append(split_embeddings[s_name])
+            idx_parts.append(
+                s_adata.obs["_scunify_orig_idx"].values
+            )
+            label_parts.append(
+                np.full(split_embeddings[s_name].shape[0], s_name)
+            )
+
+    concat_emb = np.concatenate(emb_parts, axis=0)
+    concat_idx = np.concatenate(idx_parts)
+    concat_labels = np.concatenate(label_parts)
+
+    # Sort by original index to restore adata cell order
+    sort_order = np.argsort(concat_idx)
+    all_emb = concat_emb[sort_order]
+    split_labels = concat_labels[sort_order]
+
+    n_obs, n_dim = all_emb.shape
+
+    if fold_label:
+        fold_save_dir = cfg.save_dir / fold_label
+        fold_save_dir.mkdir(parents=True, exist_ok=True)
+    else:
+        fold_save_dir = cfg.save_dir
+    out_path = fold_save_dir / f"{cfg.task_name}.npy"
+
+    meta = {
+        "name": task_name,
+        "fold": fold_label or "single",
+        "n_obs": n_obs,
+        "n_dim": n_dim,
+        "epochs": fold_results["actual_epochs"],
+        "final_loss": round(fold_results["avg_loss"], 6),
+        "final_val_loss": round(fold_results["val_loss"], 6),
+        "early_stopped": fold_results["actual_epochs"] < int(
+            cfg.get("training", {}).get("epochs", 50)
+        ),
+        "best_val_loss": round(fold_results["early_stopper"].best_loss, 6),
+        "best_epoch": fold_results["early_stopper"].best_epoch + 1,
+        "trainable_params": fold_results["train_params"],
+        "total_params": fold_results["total_params"],
+        "split_counts": {
+            "train": len(train_adata),
+            "valid": len(valid_adata),
+            "test": len(test_adata),
+        },
+    }
+    trainer.save_outputs(all_emb, out_path, meta)
+
+    # Save split labels
+    np.save(
+        str(out_path.with_name(f"{cfg.task_name}_splits.npy")),
+        split_labels,
+        allow_pickle=False,
+    )
+
+    return n_obs, n_dim, t_embed
+
+
+# ------------------------------------------------------------------ #
+#  Main entry point
+# ------------------------------------------------------------------ #
+
+def training_loop_per_worker(training_loop_config):
+    """Training loop per worker. Mirrors ``inference_loop_per_worker``.
+
+    Expected inputs (training_loop_config):
+      - "cfg": ScUnifyConfig with ``training`` section
+      - "progress_actor": TrainingProgressActor
+    """
+    # --------- Config / Seed ---------
+    cfg = training_loop_config.get("cfg")
+
+    import random
+
+    training_cfg = cfg.get("training", {})
+    seed = training_cfg.get("seed", 42)
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
+
+    if torch.cuda.is_available():
+        local_rank = int(os.environ.get("LOCAL_RANK", "0"))
+        torch.cuda.set_device(local_rank)
+
+    progress = training_loop_config.get("progress_actor")
+
+    # --------- Timer ---------
+    timer = TimeLogger()
+    timer.start("total")
+    t_load_d = float(getattr(cfg, "t_load_d", 0.0))
+
+    # --------- Resolve Trainer ---------
+    TrainerCls = resolve_trainer(cfg)
+
+    # --------- Accelerator (DDP + LoRA: find_unused_parameters) ---------
+    acc_kwargs = cfg.get("accelerate", {}) or {}
+    ddp_kwargs = DistributedDataParallelKwargs(find_unused_parameters=True)
+    accelerator = Accelerator(kwargs_handlers=[ddp_kwargs], **acc_kwargs)
+
+    # --------- Load adata ---------
+    adata = ray.get(cfg.get("adata_ref"))
+    trainer = TrainerCls(cfg)
+
+    # --------- GPU / Progress setup ---------
+    visible = os.environ.get("CUDA_VISIBLE_DEVICES", "")
+    gpu_map = (
+        [int(x) for x in visible.split(",")]
+        if visible
+        else list(range(torch.cuda.device_count()))
+    )
+    local_rank = int(os.environ.get("LOCAL_RANK", "0"))
+    actual_gpu_id = (
+        gpu_map[local_rank] if local_rank < len(gpu_map) else local_rank
+    )
+    monitor = GPUMonitor(actual_gpu_id, interval=0.5)
+    task_name = cfg.get("task_name")
+
+    ray.get(
+        progress.set_status.remote(task_name, local_rank, "STARTING")
+    )
+    monitor.start()
+
+    # --------- Split ---------
+    split_cfg = training_cfg.get("split", {})
+    splitter = DataSplitter(split_cfg)
+    method = split_cfg.get("method", "column_key")
+
+    if method == "kfold":
+        _run_kfold(
+            trainer=trainer,
+            splitter=splitter,
+            adata=adata,
+            accelerator=accelerator,
+            training_cfg=training_cfg,
+            cfg=cfg,
+            progress=progress,
+            task_name=task_name,
+            local_rank=local_rank,
+            actual_gpu_id=actual_gpu_id,
+            timer=timer,
+            monitor=monitor,
+            t_load_d=t_load_d,
+        )
+    else:
+        _run_single(
+            trainer=trainer,
+            splitter=splitter,
+            adata=adata,
+            accelerator=accelerator,
+            training_cfg=training_cfg,
+            cfg=cfg,
+            progress=progress,
+            task_name=task_name,
+            local_rank=local_rank,
+            actual_gpu_id=actual_gpu_id,
+            timer=timer,
+            monitor=monitor,
+            t_load_d=t_load_d,
         )
 
-    # --------- Embedding extraction (per split → concat) ---------
+
+# ------------------------------------------------------------------ #
+#  Single split path (original behavior)
+# ------------------------------------------------------------------ #
+
+def _run_single(
+    *,
+    trainer,
+    splitter,
+    adata,
+    accelerator,
+    training_cfg,
+    cfg,
+    progress,
+    task_name,
+    local_rank,
+    actual_gpu_id,
+    timer,
+    monitor,
+    t_load_d,
+):
+    """Original single-split training path."""
+    timer.start("load(d)")
+    train_adata, valid_adata, test_adata = splitter.split(adata)
+    t_load_ds = timer.stop("load(d)")
+
+    timer.start("load(m)+train")
+    fold_results = _train_one_fold(
+        trainer=trainer,
+        train_adata=train_adata,
+        valid_adata=valid_adata,
+        accelerator=accelerator,
+        training_cfg=training_cfg,
+        cfg=cfg,
+        progress=progress,
+        task_name=task_name,
+        local_rank=local_rank,
+        actual_gpu_id=actual_gpu_id,
+        fold_label="",
+        timer=timer,
+    )
+    t_train = timer.stop("load(m)+train")
+
+    # --------- Embedding extraction ---------
     n_obs = n_dim = 0
     t_embed = 0.0
     if training_cfg.get("extract_embeddings", True):
         ray.get(
             progress.set_status.remote(task_name, local_rank, "EVAL")
         )
-        model.eval()
-        timer.start("embed")
-
-        unwrapped_model = accelerator.unwrap_model(model)
-        split_embeddings = {}
-
-        for split_name, split_adata in [
-            ("train", train_adata),
-            ("valid", valid_adata),
-            ("test", test_adata),
-        ]:
-            emb = trainer.extract_embeddings(unwrapped_model, split_adata)
-            if emb is not None:
-                split_embeddings[split_name] = emb
-                logger.info(
-                    f"[{task_name}] {split_name} embeddings: {emb.shape}"
-                )
-
-        t_embed = timer.stop("embed")
-
-        # Concat and restore original cell order via _scunify_orig_idx
-        if accelerator.is_main_process and split_embeddings:
-            # Collect embeddings + orig indices + labels per split
-            emb_parts = []
-            idx_parts = []
-            label_parts = []
-            for s_name, s_adata in [
-                ("train", train_adata),
-                ("valid", valid_adata),
-                ("test", test_adata),
-            ]:
-                if s_name in split_embeddings:
-                    emb_parts.append(split_embeddings[s_name])
-                    idx_parts.append(
-                        s_adata.obs["_scunify_orig_idx"].values
-                    )
-                    label_parts.append(
-                        np.full(split_embeddings[s_name].shape[0], s_name)
-                    )
-
-            concat_emb = np.concatenate(emb_parts, axis=0)
-            concat_idx = np.concatenate(idx_parts)
-            concat_labels = np.concatenate(label_parts)
-
-            # Sort by original index to restore adata cell order
-            sort_order = np.argsort(concat_idx)
-            all_emb = concat_emb[sort_order]
-            split_labels = concat_labels[sort_order]
-
-            n_obs, n_dim = all_emb.shape
-
-            out_path = cfg.save_dir / f"{cfg.task_name}.npy"
-            meta = {
-                "name": task_name,
-                "n_obs": n_obs,
-                "n_dim": n_dim,
-                "epochs": actual_epochs,
-                "final_loss": round(avg_loss, 6),
-                "final_val_loss": round(val_loss, 6),
-                "early_stopped": actual_epochs < epochs,
-                "best_val_loss": round(early_stopper.best_loss, 6),
-                "best_epoch": early_stopper.best_epoch + 1,
-                "trainable_params": train_params,
-                "total_params": total_params,
-                "split_counts": {
-                    "train": len(train_adata),
-                    "valid": len(valid_adata),
-                    "test": len(test_adata),
-                },
-                "t_train": round(t_train, 3),
-                "t_embed": round(t_embed, 3),
-                "t_load_data": round(t_load_d, 3),
-                "t_load_model": round(t_load_m, 3),
-            }
-            trainer.save_outputs(all_emb, out_path, meta)
-
-            # Save split labels
-            np.save(
-                str(out_path.with_name(f"{cfg.task_name}_splits.npy")),
-                split_labels,
-                allow_pickle=False,
-            )
+        n_obs, n_dim, t_embed = _extract_and_save_embeddings(
+            trainer=trainer,
+            model=fold_results["model"],
+            accelerator=accelerator,
+            train_adata=train_adata,
+            valid_adata=valid_adata,
+            test_adata=test_adata,
+            cfg=cfg,
+            task_name=task_name,
+            fold_label="",
+            fold_results=fold_results,
+            timer=timer,
+        )
 
     # --------- Finish ---------
     ray.get(progress.finish.remote(task_name, local_rank))
@@ -341,18 +496,152 @@ def training_loop_per_worker(training_loop_config):
         {
             "name": task_name,
             "mode": "training",
-            "epochs": actual_epochs,
-            "final_loss": round(avg_loss, 6),
-            "final_val_loss": round(val_loss, 6),
-            "early_stopped": actual_epochs < epochs,
-            "trainable_params": train_params,
-            "total_params": total_params,
+            "epochs": fold_results["actual_epochs"],
+            "final_loss": round(fold_results["avg_loss"], 6),
+            "final_val_loss": round(fold_results["val_loss"], 6),
+            "early_stopped": fold_results["actual_epochs"]
+            < int(training_cfg.get("epochs", 50)),
+            "trainable_params": fold_results["train_params"],
+            "total_params": fold_results["total_params"],
             "n_obs": n_obs,
             "n_dim": n_dim,
             "t_train": round(t_train, 3),
             "t_load_data": round(t_load_d, 3),
-            "t_load_model": round(t_load_m, 3),
             "t_total": round(t_total, 3),
+            "gpu_util_mean": round(util_mean, 1),
+            "gpu_util_max": round(util_max, 1),
+            "gpu_mem_peak": int(mem_max),
+        }
+    )
+
+
+# ------------------------------------------------------------------ #
+#  KFold path
+# ------------------------------------------------------------------ #
+
+def _run_kfold(
+    *,
+    trainer,
+    splitter,
+    adata,
+    accelerator,
+    training_cfg,
+    cfg,
+    progress,
+    task_name,
+    local_rank,
+    actual_gpu_id,
+    timer,
+    monitor,
+    t_load_d,
+):
+    """K-fold cross-validation training path."""
+    timer.start("split")
+    test_adata, folds = splitter.split_kfold(adata)
+    timer.stop("split")
+
+    n_folds = len(folds)
+    all_fold_results = []
+
+    for fold_i, (train_adata, valid_adata) in enumerate(folds):
+        fold_label = f"fold_{fold_i}"
+        logger.info(
+            f"[{task_name}] === {fold_label} ({fold_i + 1}/{n_folds}) ==="
+        )
+
+        ray.get(
+            progress.set_status.remote(
+                task_name, local_rank, f"TRAIN {fold_label}"
+            )
+        )
+
+        timer.start(f"train_{fold_label}")
+        fold_results = _train_one_fold(
+            trainer=trainer,
+            train_adata=train_adata,
+            valid_adata=valid_adata,
+            accelerator=accelerator,
+            training_cfg=training_cfg,
+            cfg=cfg,
+            progress=progress,
+            task_name=task_name,
+            local_rank=local_rank,
+            actual_gpu_id=actual_gpu_id,
+            fold_label=fold_label,
+            timer=timer,
+        )
+        t_fold_train = timer.stop(f"train_{fold_label}")
+
+        # --------- Per-fold embedding extraction ---------
+        n_obs = n_dim = 0
+        t_embed = 0.0
+        if training_cfg.get("extract_embeddings", True):
+            ray.get(
+                progress.set_status.remote(
+                    task_name, local_rank, f"EVAL {fold_label}"
+                )
+            )
+            n_obs, n_dim, t_embed = _extract_and_save_embeddings(
+                trainer=trainer,
+                model=fold_results["model"],
+                accelerator=accelerator,
+                train_adata=train_adata,
+                valid_adata=valid_adata,
+                test_adata=test_adata,
+                cfg=cfg,
+                task_name=task_name,
+                fold_label=fold_label,
+                fold_results=fold_results,
+                timer=timer,
+            )
+
+        fold_results["t_train"] = t_fold_train
+        fold_results["t_embed"] = t_embed
+        fold_results["n_obs"] = n_obs
+        fold_results["n_dim"] = n_dim
+        all_fold_results.append(fold_results)
+
+        # Report per-fold metrics
+        ray_train.report(
+            {
+                "fold": fold_label,
+                "fold_i": fold_i,
+                "n_folds": n_folds,
+                "epochs": fold_results["actual_epochs"],
+                "loss": fold_results["avg_loss"],
+                "val_loss": fold_results["val_loss"],
+                "best_val_loss": fold_results["early_stopper"].best_loss,
+            }
+        )
+
+        # Free GPU memory before next fold
+        del fold_results["model"]
+        torch.cuda.empty_cache()
+
+    # --------- Aggregate and final report ---------
+    ray.get(progress.finish.remote(task_name, local_rank))
+    util_mean, util_max, mem_max = monitor.stop()
+    if util_mean is None:
+        util_mean = util_max = mem_max = 0
+    t_total = timer.stop("total")
+
+    avg_val_losses = [r["val_loss"] for r in all_fold_results]
+    best_val_losses = [r["early_stopper"].best_loss for r in all_fold_results]
+
+    ray_train.report(
+        {
+            "name": task_name,
+            "mode": "training_kfold",
+            "n_folds": n_folds,
+            "mean_val_loss": round(float(np.mean(avg_val_losses)), 6),
+            "std_val_loss": round(float(np.std(avg_val_losses)), 6),
+            "mean_best_val_loss": round(float(np.mean(best_val_losses)), 6),
+            "per_fold_val_loss": [round(v, 6) for v in avg_val_losses],
+            "per_fold_best_val_loss": [round(v, 6) for v in best_val_losses],
+            "n_obs": all_fold_results[-1]["n_obs"] if all_fold_results else 0,
+            "n_dim": all_fold_results[-1]["n_dim"] if all_fold_results else 0,
+            "t_total": round(t_total, 3),
+            "t_load_data": round(t_load_d, 3),
             "gpu_util_mean": round(util_mean, 1),
             "gpu_util_max": round(util_max, 1),
             "gpu_mem_peak": int(mem_max),

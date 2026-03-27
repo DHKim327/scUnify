@@ -3,7 +3,10 @@ import torch.nn as nn
 
 
 class GeneformerWrapper(nn.Module):
-    """Wrapper for Geneformer V2 (BertForMaskedLM) embedding extraction."""
+    """Base wrapper for Geneformer V2 — model loading only, no forward.
+
+    Subclassed by inferencer and trainer wrappers which define their own forward.
+    """
 
     def __init__(self, config):
         super().__init__()
@@ -12,43 +15,8 @@ class GeneformerWrapper(nn.Module):
         self.emb_layer = inference_cfg.get("emb_layer", -1)
         self.emb_mode = inference_cfg.get("emb_mode", "cls")
 
-        # Compute layer index using the same logic as geneformer's EmbExtractor:
-        # quant_layers(model) returns num_hidden_layers, so with emb_layer=-1:
-        # layer_to_quant = num_hidden_layers + (-1) = second-to-last hidden layer
         num_layers = self.model.config.num_hidden_layers
         self._layer_to_quant = num_layers + self.emb_layer
-
-    def forward(self, input_ids, attention_mask):
-        with torch.no_grad():
-            outputs = self.model(
-                input_ids=input_ids,
-                attention_mask=attention_mask,
-            )
-
-        # hidden_states: tuple of (n_layers+1) tensors, index 0 = embedding output
-        # Use quant_layers + emb_layer indexing (same as geneformer EmbExtractor)
-        # e.g. 12-layer model, emb_layer=-1 → index 11 (second-to-last)
-        hidden = outputs.hidden_states[self._layer_to_quant]
-
-        if self.emb_mode == "cls":
-            # CLS token is at position 0
-            return hidden[:, 0, :]  # (batch, hidden_size)
-        else:
-            # Mean pooling over gene tokens (exclude CLS at 0 and EOS at end)
-            # Use attention_mask to exclude padding
-            mask = attention_mask.clone()
-            mask[:, 0] = 0  # exclude CLS
-            # Find EOS position per sample and exclude
-            lengths = attention_mask.sum(dim=1)  # actual sequence lengths
-            for i in range(len(lengths)):
-                eos_pos = lengths[i] - 1
-                if eos_pos > 0:
-                    mask[i, eos_pos] = 0
-
-            mask_expanded = mask.unsqueeze(-1).float()
-            sum_hidden = (hidden * mask_expanded).sum(dim=1)
-            count = mask_expanded.sum(dim=1).clamp(min=1)
-            return sum_hidden / count  # (batch, hidden_size)
 
 
 def load(config):

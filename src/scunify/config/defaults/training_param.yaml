@@ -7,7 +7,6 @@ training:
   batch_size: 32
   gradient_accumulation_steps: 1
   seed: 42
-  mixed_precision: true
   save_checkpoint: true
   extract_embeddings: true
 
@@ -37,14 +36,16 @@ training:
     min_delta: 0.0
 
   split:
-    method: "column_key"              # "column_key" | "random"
-    column_key: null                  # str | list[str] | null (null → random)
-    train_ratio: 0.8                  # 80% for training (train + valid)
-    valid_ratio: 0.1                  # 10% of training set for validation
-    test_ratio: 0.2                   # 20% held out for evaluation
+    method: "kfold"                   # "column_key" | "random" | "kfold"
+    test_ratio: 0.2
     seed: 42
 
-  mlm:
-    mask_prob: 0.15
-    mask_token_prob: 0.8
-    random_token_prob: 0.1
+    column_key:                       # used when method="column_key"
+      key: null                       # obs column (str | list[str] | null → random)
+      train_ratio: 0.8
+      valid_ratio: 0.1
+
+    kfold:                            # used when method="kfold"
+      n_folds: 5
+      stratify_key: null              # e.g. "cell_type"
+      group_key: null                 # e.g. "batch"

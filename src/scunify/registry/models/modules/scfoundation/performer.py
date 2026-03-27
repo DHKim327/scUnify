@@ -81,6 +81,7 @@ class Always(nn.Module):
 
 def softmax_kernel(data, *, projection_matrix, is_query, normalize_data=True, eps=1e-4, device=None):
     b, h, *_ = data.shape
+    orig_dtype = data.dtype
 
     data_normalizer = (data.shape[-1] ** -0.25) if normalize_data else 1.0
 
@@ -96,12 +97,16 @@ def softmax_kernel(data, *, projection_matrix, is_query, normalize_data=True, ep
     diag_data = (diag_data / 2.0) * (data_normalizer**2)
     diag_data = diag_data.unsqueeze(dim=-1)
 
+    # fp32 upcast for exp() — prevents fp16 overflow (max 65504)
+    data_dash = data_dash.float()
+    diag_data = diag_data.float()
+
     if is_query:
         data_dash = ratio * (torch.exp(data_dash - diag_data - torch.max(data_dash, dim=-1, keepdim=True).values) + eps)
     else:
         data_dash = ratio * (torch.exp(data_dash - diag_data - torch.max(data_dash)) + eps)
 
-    return data_dash.type_as(data)
+    return data_dash.to(orig_dtype)
 
 
 def generalized_kernel(
@@ -160,12 +165,15 @@ def gaussian_orthogonal_random_matrix(nb_rows, nb_columns, scaling=0, device=Non
 
 
 # non-causal linear attention
-def linear_attention(q, k, v):
+def linear_attention(q, k, v, eps=1e-6):
+    orig_dtype = q.dtype
+    # fp32 upcast for numerical stability (division, einsum accumulation)
+    q, k, v = q.float(), k.float(), v.float()
     k_cumsum = k.sum(dim=-2)
-    D_inv = 1.0 / torch.einsum("...nd,...d->...n", q, k_cumsum.type_as(q))
+    D_inv = 1.0 / torch.einsum("...nd,...d->...n", q, k_cumsum).clamp(min=eps)
     context = torch.einsum("...nd,...ne->...de", k, v)
     out = torch.einsum("...de,...nd,...n->...ne", context, q, D_inv)
-    return out
+    return out.to(orig_dtype)
 
 
 # efficient causal linear attention, created by EPFL
@@ -777,17 +785,17 @@ class PerformerModule(nn.Module):
         assert n <= self.max_seq_len, (
             f"sequence length {n} must be less than the max sequence length {self.max_seq_len}"
         )
-        #         print('00 input b,n,device',b,n,device,x.shape)
 
-        if output_attentions:
-            x, attn_weights = self.performer(x, output_attentions=output_attentions, **kwargs)
-            # norm and to logits
-            x = self.norm(x)
+        # Performer's linear attention is not AMP-safe (fp16 overflow in exp/einsum).
+        # Run entire Performer block in fp32; caller keeps fp16 for other modules.
+        with torch.autocast(device_type=device.type, enabled=False):
+            x = x.float()
 
-            return x, attn_weights
-
-        else:
-            x = self.performer(x, output_attentions=output_attentions, **kwargs)
-            x = self.norm(x)
-
-            return x
+            if output_attentions:
+                x, attn_weights = self.performer(x, output_attentions=output_attentions, **kwargs)
+                x = self.norm(x)
+                return x, attn_weights
+            else:
+                x = self.performer(x, output_attentions=output_attentions, **kwargs)
+                x = self.norm(x)
+                return x

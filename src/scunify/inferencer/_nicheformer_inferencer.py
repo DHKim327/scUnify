@@ -1,6 +1,6 @@
 from ..registry.dataset import NicheformerDataset
-from ..registry.models import NicheformerWrapper
 from .base._baseinferencer import BaseInferencer
+from .models import NicheformerInferenceWrapper
 
 
 class NicheformerInferencer(BaseInferencer):
@@ -8,7 +8,7 @@ class NicheformerInferencer(BaseInferencer):
         return NicheformerDataset(adata, self.cfg)
 
     def build_model(self):
-        return NicheformerWrapper(self.cfg)
+        return NicheformerInferenceWrapper(self.cfg)
 
     def forward_step(self, model, batch):
         input_ids = batch["input_ids"]

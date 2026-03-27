@@ -2,7 +2,7 @@
 version: 1
 
 accelerate:
-  mixed_precision: fp16   # no | fp16 | bf16 | fp8
+  mixed_precision: fp16     # no | fp16 | bf16 | fp8
   cpu: false              # 디버그/CPU 전용 시 true
   split_batches: false
 

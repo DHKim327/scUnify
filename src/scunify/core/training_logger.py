@@ -54,6 +54,7 @@ class TrainingProgressActor:
         total_epochs: int | None = None,
         loss: float | None = None,
         val_loss: float | None = None,
+        fold: str | None = None,
     ):
         row = self.rows.setdefault(
             (task_name, rank),
@@ -68,6 +69,7 @@ class TrainingProgressActor:
                 total_epochs=0,
                 loss=None,
                 val_loss=None,
+                fold=None,
                 status="PENDING",
             ),
         )
@@ -87,6 +89,8 @@ class TrainingProgressActor:
             row["loss"] = loss
         if val_loss is not None:
             row["val_loss"] = val_loss
+        if fold is not None:
+            row["fold"] = fold
 
     def set_status(self, task_name: str, rank: int, status: str):
         r = self.rows.get((task_name, rank))
@@ -125,6 +129,7 @@ class TrainingProgressUI:
         tbl.add_column("Worker")
         tbl.add_column("GPU ID")
         tbl.add_column("BS")
+        tbl.add_column("Fold")
         tbl.add_column("Epoch")
         tbl.add_column("Batches")
         tbl.add_column("Progress")
@@ -150,11 +155,15 @@ class TrainingProgressUI:
             vloss_val = row.get("val_loss")
             vloss_str = f"{vloss_val:.4f}" if vloss_val is not None else "-"
 
+            fold_val = row.get("fold")
+            fold_str = fold_val if fold_val else "-"
+
             tbl.add_row(
                 row["task"],
                 str(row["rank"]),
                 str(row["gpu"]),
                 str(row["batch_size"]),
+                fold_str,
                 epoch_str,
                 f"{done}/{total}" if total else f"{done}/?",
                 bar if total else "·" * bar_len,

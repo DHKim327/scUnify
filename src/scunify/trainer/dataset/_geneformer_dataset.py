@@ -33,39 +33,17 @@ class GeneformerTrainingDataset(GeneformerDataset):
         self.mask_token_prob = float(mlm_cfg.get("mask_token_prob", 0.8))
         self.random_token_prob = float(mlm_cfg.get("random_token_prob", 0.1))
 
-        # Resolve <mask> token ID
-        self._mask_token_id = self._resolve_mask_token_id()
+        # Resolve <mask> token ID (parent now stores it from gene_token_dict)
+        if self.mask_token_id is not None:
+            self._mask_token_id = self.mask_token_id
+        else:
+            self._mask_token_id = self.eos_token_id + 1
+            logger.warning(
+                f"<mask> not found in gene_token_dict, "
+                f"falling back to eos_token_id + 1 = {self._mask_token_id}"
+            )
         # Vocab size for random token replacement
         self._vocab_size = len(self.gene_tokens) + 4  # +special tokens
-
-    def _resolve_mask_token_id(self) -> int:
-        """Find <mask> token ID in the gene token dictionary.
-
-        Geneformer V2 (104M dict) should contain ``<mask>`` as a special
-        token.  If not found, fall back to ``<eos>`` + 1 as a heuristic.
-        """
-        # The parent __init__ stored cls_token_id and eos_token_id.
-        # Try to access the token dict via the config resources.
-        import pickle
-
-        inference_cfg = self.cfg_ref if hasattr(self, "cfg_ref") else {}
-        # Re-read from the path stored during parent init
-        try:
-            resources = self._config.get("resources", {}) if hasattr(self, "_config") else {}
-        except Exception:
-            resources = {}
-
-        # Attempt to load token dict to find <mask>
-        # The parent already loaded gene_token_dict during __init__.
-        # We stored cls_token_id and eos_token_id but not the full dict.
-        # Use eos_token_id + 1 as a reasonable default for <mask>.
-        # This MUST be verified with the actual dict before production use.
-        mask_id = self.eos_token_id + 1
-        logger.warning(
-            f"Using mask_token_id={mask_id} (eos_token_id + 1). "
-            f"Verify this matches <mask> in gene_token_dict."
-        )
-        return mask_id
 
     def __getitem__(self, idx):
         """Tokenize + apply MLM masking."""

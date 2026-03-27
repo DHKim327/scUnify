@@ -14,6 +14,12 @@ inference:
   emb_mode: cls
   model_variant: V2-104M
 
+training:
+  mlm:
+    mask_prob: 0.15
+    mask_token_prob: 0.8
+    random_token_prob: 0.1
+
 resources:
   model_dirs:
     V1-10M: "{resource_dir}/Geneformer/Geneformer-V1-10M"

@@ -1,6 +1,6 @@
 from ..registry.dataset import ScFoundationDataset
-from ..registry.models import ScFoundationWrapper
 from .base._baseinferencer import BaseInferencer
+from .models import ScFoundationInferenceWrapper
 
 
 class ScFoundationInferencer(BaseInferencer):
@@ -8,7 +8,7 @@ class ScFoundationInferencer(BaseInferencer):
         return ScFoundationDataset(adata, self.cfg)
 
     def build_model(self):
-        return ScFoundationWrapper(self.cfg)
+        return ScFoundationInferenceWrapper(self.cfg)
 
     def forward_step(self, model, batch):
         values, pad, pos, cid = batch

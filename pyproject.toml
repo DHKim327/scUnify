@@ -29,7 +29,7 @@ dependencies = []
 # scUnify[core]: Master 전용 (경량!)
 # numpy/scanpy/scipy는 Worker 환경에서 관리
 optional-dependencies.core = [
-  "ray[default,train]>=2.48",  # Runner, Task 분산
+  "ray[default,train]==2.54.0",  # Runner, Task 
   "rich>=13.0",                 # ProgressUI
   "pyyaml>=6.0",                # config 파일
   "nvidia-ml-py>=11.450",       # GPU 모니터링 (pynvml)

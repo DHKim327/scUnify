@@ -3,18 +3,16 @@ import torch.nn as nn
 
 
 class UCEWrapper(nn.Module):
+    """Base wrapper for UCE — model loading only, no forward.
+
+    Subclassed by inferencer and trainer wrappers which define their own forward.
+    """
+
     def __init__(self, config):
         super(UCEWrapper, self).__init__()
         model = load(config)
         self.pe_embedding = model.pe_embedding
         self.encoder = model
-
-    def forward(self, batch_sentences, mask):
-        batch_sentences = batch_sentences.permute(1, 0)
-        batch_sentences = self.pe_embedding(batch_sentences.long())
-        batch_sentences = nn.functional.normalize(batch_sentences, dim=2)  # Normalize token outputs now
-        _, embedding = self.encoder(batch_sentences, mask=mask)
-        return embedding
 
 
 from ...utils import load_yaml

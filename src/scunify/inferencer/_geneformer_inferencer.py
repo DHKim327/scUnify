@@ -1,6 +1,6 @@
 from ..registry.dataset import GeneformerDataset
-from ..registry.models import GeneformerWrapper
 from .base._baseinferencer import BaseInferencer
+from .models import GeneformerInferenceWrapper
 
 
 class GeneformerInferencer(BaseInferencer):
@@ -8,7 +8,7 @@ class GeneformerInferencer(BaseInferencer):
         return GeneformerDataset(adata, self.cfg)
 
     def build_model(self):
-        return GeneformerWrapper(self.cfg)
+        return GeneformerInferenceWrapper(self.cfg)
 
     def forward_step(self, model, batch):
         input_ids = batch["input_ids"]

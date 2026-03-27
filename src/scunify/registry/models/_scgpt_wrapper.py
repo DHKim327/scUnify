@@ -3,24 +3,14 @@ import torch.nn as nn
 
 
 class ScGPTWrapper(nn.Module):
+    """Base wrapper for scGPT — model loading only, no forward.
+
+    Subclassed by inferencer and trainer wrappers which define their own forward.
+    """
+
     def __init__(self, config):
         super(ScGPTWrapper, self).__init__()
         self.model = load(config)
-
-    def forward(self, input_gene_ids, expr, src_key_padding_mask):
-        embedding = self.model._encode(
-            input_gene_ids,
-            expr,
-            src_key_padding_mask=src_key_padding_mask,
-        )
-        # Extract CLS token embedding
-        embedding = embedding[:, 0, :]  # (batch_size, embed_dim)
-        
-        # L2 normalization (same as original scGPT implementation)
-        # Original: cell_embeddings / np.linalg.norm(cell_embeddings, axis=1, keepdims=True)
-        embedding = torch.nn.functional.normalize(embedding, p=2, dim=1)
-        
-        return embedding
 
 
 # -------------------------------- Load model utils --------------------------------#

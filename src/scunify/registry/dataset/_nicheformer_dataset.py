@@ -1,7 +1,6 @@
 import logging
 
 import anndata as ad
-import numba
 import numpy as np
 import torch
 from pyensembl import EnsemblRelease
@@ -54,33 +53,6 @@ ASSAY_TOKENS = {
 }
 
 
-# ── Tokenization (original Nicheformer algorithm) ─────────────────────
-
-def _sf_normalize(X):
-    """Size-factor normalize to 10 000 counts per cell."""
-    counts = X.sum(axis=1, keepdims=True)
-    counts[counts == 0] = 1.0
-    return X * (10000.0 / counts)
-
-
-@numba.jit(nopython=True, nogil=True)
-def _sub_tokenize_data(x, max_seq_len=4096, aux_tokens=30):
-    """Rank genes by expression (descending) and convert to token IDs.
-
-    Identical to the original nicheformer ``_sub_tokenize_data``.
-    """
-    out = np.empty((x.shape[0], max_seq_len), dtype=np.int32)
-    for i in range(x.shape[0]):
-        cell = x[i]
-        nonzero_mask = np.nonzero(cell)[0]
-        sorted_indices = nonzero_mask[np.argsort(-cell[nonzero_mask])][:max_seq_len]
-        sorted_indices = sorted_indices + aux_tokens
-        scores = np.zeros(max_seq_len, dtype=np.int32)
-        scores[:len(sorted_indices)] = sorted_indices.astype(np.int32)
-        out[i, :] = scores
-    return out
-
-
 # ── Dataset ────────────────────────────────────────────────────────────
 
 class NicheformerDataset(Dataset):
@@ -104,12 +76,13 @@ class NicheformerDataset(Dataset):
         # ── Gene reference ──────────────────────────────────────────
         gene_ref_path = resources["gene_ref_file"]
         ref_adata = ad.read_h5ad(gene_ref_path)
-        n_ref = ref_adata.n_vars
-        logger.info(f"Reference genes: {n_ref}")
+        self.n_ref = ref_adata.n_vars
+        logger.info(f"Reference genes: {self.n_ref}")
 
         # ── Technology mean (already in reference gene order) ───────
-        tech_mean_raw = np.load(resources["technology_mean_file"]).copy()
-        tech_mean_raw[tech_mean_raw == 0] = 1.0
+        tech_mean = np.load(resources["technology_mean_file"]).copy()
+        tech_mean[tech_mean == 0] = 1.0
+        self.tech_mean = tech_mean
 
         # ── Gene symbol → ENSEMBL ID conversion ─────────────────────
         ensembl_key = inference_cfg.get("ensembl_key", None)
@@ -119,38 +92,23 @@ class NicheformerDataset(Dataset):
             species=inference_cfg.get("species", "human"),
         )
 
-        # ── Gene alignment via ad.concat (HF tokenizer strategy) ──
-        # Outer-join concat aligns genes by var_names, filling missing
-        # genes with 0. Then keep only reference genes (adata-only genes
-        # would produce token IDs beyond the model's vocabulary size).
-        aligned = ad.concat([ref_adata, adata], join="outer", axis=0)
-        aligned = aligned[1:]  # remove reference row
-        aligned = aligned[:, ref_adata.var_names]  # keep only ref genes
-        n_matched = int((aligned.X.sum(axis=0) != 0).sum()) if issparse(aligned.X) else int((aligned.X.sum(axis=0) != 0).sum())
+        # ── Lazy gene alignment: index mapping instead of ad.concat ──
+        # gene_map[i] = column index in adata for reference gene i, or -1
+        ref_var_names = list(ref_adata.var_names)
+        adata_var_lookup = {name: i for i, name in enumerate(adata.var_names)}
+        self.gene_map = np.array(
+            [adata_var_lookup.get(g, -1) for g in ref_var_names], dtype=np.intp
+        )
+        self.gene_map_valid = self.gene_map >= 0  # bool mask for matched genes
+
+        n_matched = int(self.gene_map_valid.sum())
         logger.info(
-            f"Gene alignment: {n_ref} ref genes, "
+            f"Gene alignment: {self.n_ref} ref genes, "
             f"{n_matched} matched from adata ({adata.n_vars} input genes)"
         )
 
-        # tech_mean stays in reference gene order (no expansion needed)
-        tech_mean = tech_mean_raw
-
-        # ── Build aligned expression matrix ─────────────────────────
-        X = aligned.X
-        if issparse(X):
-            aligned_X = X.toarray().astype(np.float64)
-        else:
-            aligned_X = np.asarray(X, dtype=np.float64)
-        del aligned
-
-        # ── Tokenise ────────────────────────────────────────────────
-        aligned_X = np.nan_to_num(aligned_X)
-        aligned_X = _sf_normalize(aligned_X)
-        aligned_X = aligned_X / tech_mean.reshape(1, -1)
-
-        max_seq_len = inference_cfg.get("max_seq_len", 4096)
-        self.tokens = _sub_tokenize_data(aligned_X, max_seq_len, AUX_TOKENS)
-        del aligned_X
+        # ── Keep X sparse — defer per-cell processing to __getitem__
+        self.X = adata.X
 
         # ── Context tokens ──────────────────────────────────────────
         self.species_token = _resolve_token(
@@ -163,6 +121,7 @@ class NicheformerDataset(Dataset):
             inference_cfg.get("modality", "dissociated"), MODALITY_TOKENS, "modality"
         )
         self.context_length = inference_cfg.get("context_length", 1500)
+        self.max_seq_len = inference_cfg.get("max_seq_len", 4096)
 
         self.n_cells = adata.n_obs
         self.sampler = SequentialSampler(self)
@@ -172,7 +131,31 @@ class NicheformerDataset(Dataset):
         return self.n_cells
 
     def __getitem__(self, idx):
-        gene_tokens = self.tokens[idx]  # (max_seq_len,) int32, 0-padded
+        # ── Per-cell: sparse row → align → sf_norm → ÷ tech_mean → tokenize
+        row = self.X[idx]
+        if issparse(row):
+            row = row.toarray().ravel().astype(np.float64)
+        else:
+            row = np.asarray(row, dtype=np.float64).ravel()
+
+        # Gene alignment: map adata columns → reference gene order
+        aligned = np.zeros(self.n_ref, dtype=np.float64)
+        aligned[self.gene_map_valid] = row[self.gene_map[self.gene_map_valid]]
+        np.nan_to_num(aligned, copy=False)
+
+        # SF normalize to 10 000 counts (per-cell)
+        total = aligned.sum()
+        if total > 0:
+            aligned *= 10000.0 / total
+
+        # Divide by technology mean
+        aligned /= self.tech_mean
+
+        # Tokenize: rank nonzero genes descending → token IDs
+        nonzero_idx = np.nonzero(aligned)[0]
+        sorted_idx = nonzero_idx[np.argsort(-aligned[nonzero_idx])][:self.max_seq_len]
+        gene_tokens = np.zeros(self.max_seq_len, dtype=np.int32)
+        gene_tokens[:len(sorted_idx)] = (sorted_idx + AUX_TOKENS).astype(np.int32)
 
         # Prepend context: [species, assay, modality]
         context = np.array(
@@ -181,14 +164,14 @@ class NicheformerDataset(Dataset):
         )
         full_seq = np.concatenate([context, gene_tokens])[: self.context_length]
 
-        # Pad to exactly context_length (safety — always true when max_seq_len ≥ context_length-3)
+        # Pad to exactly context_length
         if len(full_seq) < self.context_length:
             padded = np.zeros(self.context_length, dtype=np.int32)
             padded[: len(full_seq)] = full_seq
             full_seq = padded
 
         # Attention mask: 1 for real tokens, 0 for PAD (HF convention)
-        n_genes = int(np.count_nonzero(gene_tokens))
+        n_genes = int(len(sorted_idx))
         n_real = min(3 + n_genes, self.context_length)
         attn_mask = np.zeros(self.context_length, dtype=np.int64)
         attn_mask[:n_real] = 1
