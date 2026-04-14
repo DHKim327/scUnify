@@ -42,6 +42,17 @@ class NicheformerTrainingDataset(NicheformerDataset):
 
         training_cfg = config.get("training", {})
         mlm_cfg = training_cfg.get("mlm", {})
+
+        # Label passthrough from adata.obs
+        self._label_arrays = {}
+        for key in training_cfg.get("label_keys", []):
+            if key in adata.obs.columns:
+                col = adata.obs[key]
+                self._label_arrays[key] = (
+                    col.cat.codes.values.copy()
+                    if hasattr(col, "cat")
+                    else col.values.copy()
+                )
         self.mask_ratio = float(mlm_cfg.get("mask_prob", 0.15))
         self.mask_token_prob = float(mlm_cfg.get("mask_token_prob", 0.8))
         self.random_token_prob = float(mlm_cfg.get("random_token_prob", 0.1))
@@ -90,19 +101,25 @@ class NicheformerTrainingDataset(NicheformerDataset):
                     ).item()
                 # else: 10% → keep original
 
-        return {
+        result = {
             "input_ids": input_ids,
             "attention_mask": attn_mask,
             "labels": labels,
             "cid": base["cid"],
         }
+        for key, arr in self._label_arrays.items():
+            result[key] = torch.tensor(arr[idx], dtype=torch.long)
+        return result
 
-    @staticmethod
-    def collator(batch):
+    def collator(self, batch):
         """Stack fixed-length sequences (already padded to context_length)."""
-        return {
+        result = {
             "input_ids": torch.stack([b["input_ids"] for b in batch]),
             "attention_mask": torch.stack([b["attention_mask"] for b in batch]),
             "labels": torch.stack([b["labels"] for b in batch]),
             "cid": torch.tensor([b["cid"] for b in batch], dtype=torch.long),
         }
+        for key in self._label_arrays:
+            if key in batch[0]:
+                result[key] = torch.stack([b[key] for b in batch])
+        return result

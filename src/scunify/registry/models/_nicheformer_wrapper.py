@@ -11,8 +11,8 @@ class NicheformerWrapper(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.model = load(config)
-        inference_cfg = config.get("inference", {})
-        self.emb_layer = inference_cfg.get("emb_layer", -1)
+        model_cfg = config.get("model", {})
+        self.emb_layer = model_cfg.get("emb_layer", -1)
 
 
 def load(config):

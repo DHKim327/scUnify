@@ -30,7 +30,7 @@ def inference_loop_per_worker(inference_loop_config):
     import random
     import numpy as np
 
-    seed = cfg.get("inference", {}).get("seed", 0)
+    seed = cfg.get("dataloader", {}).get("seed", 0)
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
@@ -81,7 +81,7 @@ def inference_loop_per_worker(inference_loop_config):
     monitor = GPUMonitor(actual_gpu_id, interval=0.5)
 
     total_batches = len(dl)
-    bs = int(cfg.get("inference").get("batch_size"))
+    bs = int(cfg.get("dataloader", {}).get("batch_size", 32))
     task_name = cfg.get("task_name")
 
     # --------- Inference ---------
@@ -127,7 +127,7 @@ def inference_loop_per_worker(inference_loop_config):
             "n_obs": n_obs,
             "n_dim": n_dim,
             "world_size": accelerator.num_processes,
-            "batch_size": int(cfg.get("inference", {}).get("batch_size", 32)),
+            "batch_size": int(cfg.get("dataloader", {}).get("batch_size", 32)),
             "dataset_n": int(len(ds)),
             "t_infer": round(t_infer, 3),
             "t_load_model": round(t_load_m, 3),
@@ -146,7 +146,7 @@ def inference_loop_per_worker(inference_loop_config):
             "path": out_path if accelerator.is_main_process else "",
             "world_size": accelerator.num_processes,
             "rank": accelerator.process_index,
-            "batch_size": int(cfg.get("inference", {}).get("batch_size", 32)),
+            "batch_size": int(cfg.get("dataloader", {}).get("batch_size", 32)),
             "dataset_n": int(len(ds)),
             "n_obs": n_obs,
             "n_dim": n_dim,

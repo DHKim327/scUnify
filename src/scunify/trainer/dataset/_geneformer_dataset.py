@@ -29,6 +29,17 @@ class GeneformerTrainingDataset(GeneformerDataset):
 
         training_cfg = config.get("training", {})
         mlm_cfg = training_cfg.get("mlm", {})
+
+        # Label passthrough from adata.obs
+        self._label_arrays = {}
+        for key in training_cfg.get("label_keys", []):
+            if key in adata.obs.columns:
+                col = adata.obs[key]
+                self._label_arrays[key] = (
+                    col.cat.codes.values.copy()
+                    if hasattr(col, "cat")
+                    else col.values.copy()
+                )
         self.mask_ratio = float(mlm_cfg.get("mask_prob", 0.15))
         self.mask_token_prob = float(mlm_cfg.get("mask_token_prob", 0.8))
         self.random_token_prob = float(mlm_cfg.get("random_token_prob", 0.1))
@@ -76,15 +87,17 @@ class GeneformerTrainingDataset(GeneformerDataset):
                     ).item()
                 # else: keep original (10%)
 
-        return {
+        result = {
             "input_ids": input_ids,
             "labels": labels,
             "length": base["length"],
             "cid": base["cid"],
         }
+        for key, arr in self._label_arrays.items():
+            result[key] = torch.tensor(arr[idx], dtype=torch.long)
+        return result
 
-    @staticmethod
-    def collator(batch):
+    def collator(self, batch):
         """Dynamic padding with labels (padded positions = -100)."""
         max_len = max(b["length"] for b in batch)
         bsz = len(batch)
@@ -97,14 +110,18 @@ class GeneformerTrainingDataset(GeneformerDataset):
         for i, b in enumerate(batch):
             seq_len = b["length"]
             input_ids[i, :seq_len] = b["input_ids"]
-            # Length-based mask (CLS token ID = 0 = pad, so can't use != 0)
             attn_mask[i, :seq_len] = 1
             labels[i, :seq_len] = b["labels"]
             cids.append(b["cid"])
 
-        return {
+        result = {
             "input_ids": input_ids,
             "attention_mask": attn_mask,
             "labels": labels,
             "cid": torch.tensor(cids, dtype=torch.long),
         }
+        # Passthrough label keys
+        for key in self._label_arrays:
+            if key in batch[0]:
+                result[key] = torch.stack([b[key] for b in batch])
+        return result

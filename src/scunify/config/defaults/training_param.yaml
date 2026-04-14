@@ -4,21 +4,25 @@
 training:
   mode: "lora"
   epochs: 50
-  batch_size: 32
   gradient_accumulation_steps: 1
-  seed: 42
-  save_checkpoint: true
-  extract_embeddings: true
+
+  # --- Task configuration ---
+  task: "pretraining"                 # pretraining | classification | perturbation | regression | integration
+  task_param:                         # task-specific params, read by Mixin
+    mixin: null                       # built-in or user-registered Mixin name (overrides task default)
+  label_keys: []                      # adata.obs columns to pass through to batch
 
   lora:
+    adapter_type: "lora"              # lora | dora | rslora | adalora | loha | lokr | ia3 | oft
     rank: 8
-    alpha: 1                          # scaling = alpha/rank = 0.125
+    alpha: 8                          # scaling = alpha/rank
     dropout: 0.0
     targets:
       - query
       - value
     layer_strategy: "first"           # "first" | "last" | "all"
     layer_ratio: 0.5                  # 50% of total layers
+    # adapter-specific params added here are passed through to PEFT config
 
   optimizer:
     type: "adam"                       # adam (not adamw); scPEFT default
@@ -36,16 +40,12 @@ training:
     min_delta: 0.0
 
   split:
-    method: "kfold"                   # "column_key" | "random" | "kfold"
-    test_ratio: 0.2
-    seed: 42
+    fold_keys: null                   # obs column(s) with "train"/"valid"/("test") labels
+                                      # e.g. ["fold_0", "fold_1", "fold_2"]
+                                      # or single: "split"
 
-    column_key:                       # used when method="column_key"
-      key: null                       # obs column (str | list[str] | null → random)
-      train_ratio: 0.8
-      valid_ratio: 0.1
-
-    kfold:                            # used when method="kfold"
-      n_folds: 5
-      stratify_key: null              # e.g. "cell_type"
-      group_key: null                 # e.g. "batch"
+save:
+  checkpoint: true                    # LoRA adapter weights (adapter_model.safetensors)
+  merged_model: true                  # merge LoRA into base model and save
+  output_keys:                        # what to extract and save after training
+    - cell_embedding                  # get_cell_embedding → obsm["X_cell_embedding"]

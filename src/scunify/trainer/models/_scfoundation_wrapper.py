@@ -26,8 +26,44 @@ class ScFoundationTrainingWrapper(ScFoundationWrapper):
 
     def __init__(self, config):
         super().__init__(config)
-        self.pool_type = config.inference.get("pool_type", "all")
+        self.pool_type = config.get("model", {}).get("pool_type", "all")
 
+    # ------------------------------------------------------------------ #
+    #  Embedding access (gradient flow preserved for downstream tasks)
+    # ------------------------------------------------------------------ #
+    def get_cell_embedding(self, x, padding_label, position_gene_ids, encoder_labels=None):
+        """Encoder output mean-pooled (B, D). Gradient flow preserved.
+        Ref: Hao et al., Nature Methods 2024."""
+        x_in = torch.unsqueeze(x, 2)
+        x_emb = self.model.token_emb(x_in, output_weight=0)
+        position_emb = self.model.pos_emb(position_gene_ids)
+        x_emb += position_emb
+        geneemb = self.model.encoder(x_emb, padding_mask=padding_label)
+
+        # Ref: scFoundation get_embedding.py — pool_type choices: 'all', 'max'
+        if self.pool_type == "all":
+            g1 = geneemb[:, -1, :]
+            g2 = geneemb[:, -2, :]
+            g3, _ = torch.max(geneemb[:, :-2, :], dim=1)
+            g4 = torch.mean(geneemb[:, :-2, :], dim=1)
+            return torch.cat([g1, g2, g3, g4], dim=1)
+        elif self.pool_type == "max":
+            result, _ = torch.max(geneemb, dim=1)
+            return result
+        else:
+            raise ValueError(f"pool_type must be 'all' or 'max', got {self.pool_type}")
+
+    def get_gene_embedding(self, x, padding_label, position_gene_ids, encoder_labels=None):
+        """Encoder per-gene output (B, S, D). Gradient flow preserved."""
+        x_in = torch.unsqueeze(x, 2)
+        x_emb = self.model.token_emb(x_in, output_weight=0)
+        position_emb = self.model.pos_emb(position_gene_ids)
+        x_emb += position_emb
+        return self.model.encoder(x_emb, padding_mask=padding_label)
+
+    # ------------------------------------------------------------------ #
+    #  Forward dispatch
+    # ------------------------------------------------------------------ #
     def forward(
         self,
         x,

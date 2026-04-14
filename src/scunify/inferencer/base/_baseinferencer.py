@@ -31,21 +31,20 @@ class BaseInferencer(ABC):
     def build_dataloader(self, ds):
         from torch.utils.data import DataLoader
 
-        inf = self.cfg.get("inference", {})
-        bs = int(inf.get("batch_size", 32))
-        nw = int(inf.get("num_workers", 0))
+        dl_cfg = self.cfg.get("dataloader", {})
+        bs = int(dl_cfg.get("batch_size", 32))
+        nw = int(dl_cfg.get("num_workers", 0))
 
         collator = getattr(ds, "collator", None)
         sampler = getattr(ds, "sampler", None)
 
-        # worker_init_fn for reproducibility (inference-specific)
+        # worker_init_fn for reproducibility
         def worker_init_fn(worker_id):
             import random
             import numpy as np
             import torch
-            
-            # All workers use the global seed from config
-            seed = inf.get("seed", 0)
+
+            seed = dl_cfg.get("seed", 0)
             np.random.seed(seed)
             random.seed(seed)
             torch.manual_seed(seed)

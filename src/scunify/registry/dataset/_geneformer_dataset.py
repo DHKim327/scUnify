@@ -32,8 +32,8 @@ class GeneformerDataset(Dataset):
 
     def __init__(self, adata, config):
         # Resolve gene dictionary paths based on model_variant
-        inference_cfg = config.get("inference", {})
-        variant = inference_cfg.get("model_variant", "V2-104M")
+        model_cfg = config.get("model", {})
+        variant = model_cfg.get("variant", "V2-104M")
         dict_key = self._VARIANT_TO_DICT.get(variant, "104M")
         resources = config.get("resources", {})
         gene_dict_paths = resources["gene_dicts"][dict_key]

@@ -1,18 +1,19 @@
 # Geneformer — model-specific configuration
-# Shared by both inference and training configs.
 
 model_name: Geneformer
 
 preprocessing:
   use_raw_counts: true
 
-inference:
-  seed: 0
-  batch_size: 64
-  num_workers: 0
+model:
+  variant: V2-104M
   emb_layer: -1
   emb_mode: cls
-  model_variant: V2-104M
+
+dataloader:
+  batch_size: 64
+  num_workers: 0
+  seed: 0
 
 training:
   mlm:

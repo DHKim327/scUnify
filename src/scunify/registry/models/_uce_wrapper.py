@@ -20,7 +20,7 @@ from .modules.uce.model import TransformerModel
 
 
 def load(config):
-    nlayers = config.inference["nlayers"]
+    nlayers = config.get("model", {}).get("nlayers", 4)
     model_loc = config.resources[f"{nlayers}_layer_model"]
     args = load_yaml(config._architecture_dir)[nlayers]
     #### Set up the model ####

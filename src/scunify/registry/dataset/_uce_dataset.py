@@ -10,13 +10,14 @@ class UCEDataset(Dataset):
         self.args = config
         
         # Seed for reproducibility
-        seed = config.inference.get("seed", 42)
+        seed = config.get("dataloader", {}).get("seed", 42)
         np.random.seed(seed)
         torch.manual_seed(seed)
         if torch.cuda.is_available():
             torch.cuda.manual_seed_all(seed)
-        
-        _model_param = load_yaml(config._architecture_dir)[config.inference["nlayers"]]
+
+        model_cfg = config.get("model", {})
+        _model_param = load_yaml(config._architecture_dir)[model_cfg.get("nlayers", 4)]
         self.args.pad_length = _model_param["pad_length"]
         self.args.sample_size = _model_param["sample_size"]
         self.args.pad_length = _model_param["pad_length"]

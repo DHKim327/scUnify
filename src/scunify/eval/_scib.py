@@ -153,13 +153,7 @@ class ScibWrapper:
                 )
             else:
                 print("[INFO] Batch info invalid. Disabling batch correction metrics (bio conservation only).")
-                batch_metrics = _BatchCorrection(
-                    bras=False,
-                    ilisi_knn=False,
-                    kbet_per_label=False,
-                    graph_connectivity=False,
-                    pcr_comparison=False,
-                )
+                batch_metrics = None
         elif batch_metrics is None:
             batch_metrics = _BatchCorrection(
                 bras=True,

@@ -25,27 +25,30 @@ def inject_lora_to_model(
     model_name: str,
     lora_cfg: dict,
 ) -> nn.Module:
-    """Inject LoRA adapters via HF PEFT into any supported model.
+    """Inject PEFT adapters into any supported model.
+
+    Supports LoRA, DoRA, rsLoRA, AdaLoRA, LoHa, LoKr, IA3, OFT.
+    The adapter type is selected via ``lora_cfg["adapter_type"]``
+    (default: ``"lora"``). Adapter-specific parameters are passed
+    through from the config dict to the PEFT config class.
 
     Args:
         model: The wrapper module (e.g. ``UCETrainingWrapper``).
             ``model.model`` is the actual backbone.
         model_name: One of ``"geneformer"``, ``"nicheformer"``, etc.
-        lora_cfg: Dict with keys ``targets``, ``rank``, ``alpha``, ``dropout``,
-            and optionally ``layer_strategy``, ``layer_ratio``.
+        lora_cfg: Dict with ``adapter_type``, ``targets``, ``rank``,
+            ``alpha``, ``dropout``, and optionally ``layer_strategy``,
+            ``layer_ratio``, plus any adapter-specific params.
 
     Returns:
-        The model with LoRA injected via HF PEFT.
+        The model with PEFT adapters injected.
     """
-    from peft import LoraConfig, get_peft_model
+    from peft import get_peft_model
 
     from ._targets import LAYERS_PATTERN, resolve_peft_targets
     from ._unfused_mha import unfuse_mha_layers
 
     name = model_name.lower()
-    rank = int(lora_cfg.get("rank", 8))
-    alpha = int(lora_cfg.get("alpha", 16))
-    dropout = float(lora_cfg.get("dropout", 0.1))
     targets = lora_cfg.get("targets", ["query", "value"])
 
     # Resolve PEFT target module names
@@ -88,21 +91,110 @@ def inject_lora_to_model(
     for p in model.model.parameters():
         p.requires_grad = False
 
-    # --- Build and apply HF PEFT ---
-    lora_config = LoraConfig(
-        r=rank,
-        lora_alpha=alpha,
-        lora_dropout=dropout,
-        target_modules=target_modules,
-        bias="none",
-        layers_to_transform=layers_to_transform,
-        layers_pattern=layers_pattern,
+    # --- Build and apply PEFT adapter ---
+    peft_config = _build_peft_config(
+        lora_cfg, target_modules, layers_to_transform, layers_pattern,
     )
 
-    model.model = get_peft_model(model.model, lora_config)
+    model.model = get_peft_model(model.model, peft_config)
     model.model.print_trainable_parameters()
 
     return model
+
+
+# Backward-compatible alias
+inject_adapter_to_model = inject_lora_to_model
+
+
+def _build_peft_config(lora_cfg, target_modules, layers_to_transform, layers_pattern):
+    """Build PEFT config from lora_cfg dict. Adapter-specific params are
+    passed through — users can add any PEFT-supported kwarg to their YAML."""
+    adapter_type = lora_cfg.get("adapter_type", "lora").lower()
+
+    # Extract common params, pass the rest through to PEFT config
+    _INTERNAL_KEYS = {"adapter_type", "targets", "layer_strategy", "layer_ratio"}
+    passthrough = {k: v for k, v in lora_cfg.items() if k not in _INTERNAL_KEYS}
+
+    # Rename scUnify keys to PEFT keys where needed
+    if "rank" in passthrough:
+        passthrough["r"] = passthrough.pop("rank")
+    if "alpha" in passthrough:
+        passthrough["lora_alpha"] = passthrough.pop("alpha")
+    if "dropout" in passthrough:
+        passthrough["lora_dropout"] = passthrough.pop("dropout")
+
+    # LoRA family (LoRA / DoRA / rsLoRA) — same LoraConfig
+    if adapter_type in ("lora", "dora", "rslora"):
+        from peft import LoraConfig
+        return LoraConfig(
+            target_modules=target_modules,
+            bias="none",
+            layers_to_transform=layers_to_transform,
+            layers_pattern=layers_pattern,
+            use_dora=(adapter_type == "dora"),
+            use_rslora=(adapter_type == "rslora"),
+            **passthrough,
+        )
+
+    # AdaLoRA — adaptive rank
+    if adapter_type == "adalora":
+        from peft import AdaLoraConfig
+        return AdaLoraConfig(
+            target_modules=target_modules,
+            bias="none",
+            layers_to_transform=layers_to_transform,
+            layers_pattern=layers_pattern,
+            **passthrough,
+        )
+
+    # LoHa — Hadamard product (no layers_to_transform support)
+    if adapter_type == "loha":
+        from peft import LoHaConfig
+        # LoHa uses 'alpha' not 'lora_alpha'
+        if "lora_alpha" in passthrough:
+            passthrough["alpha"] = passthrough.pop("lora_alpha")
+        passthrough.pop("lora_dropout", None)
+        return LoHaConfig(
+            target_modules=target_modules,
+            **passthrough,
+        )
+
+    # LoKr — Kronecker product (no layers_to_transform support)
+    if adapter_type == "lokr":
+        from peft import LoKrConfig
+        if "lora_alpha" in passthrough:
+            passthrough["alpha"] = passthrough.pop("lora_alpha")
+        passthrough.pop("lora_dropout", None)
+        return LoKrConfig(
+            target_modules=target_modules,
+            **passthrough,
+        )
+
+    # IA3 — no rank/alpha/dropout
+    if adapter_type == "ia3":
+        from peft import IA3Config
+        passthrough.pop("r", None)
+        passthrough.pop("lora_alpha", None)
+        passthrough.pop("lora_dropout", None)
+        return IA3Config(
+            target_modules=target_modules,
+            **passthrough,
+        )
+
+    # OFT — orthogonal finetuning (no alpha/dropout)
+    if adapter_type == "oft":
+        from peft import OFTConfig
+        passthrough.pop("lora_alpha", None)
+        passthrough.pop("lora_dropout", None)
+        return OFTConfig(
+            target_modules=target_modules,
+            **passthrough,
+        )
+
+    raise ValueError(
+        f"Unknown adapter_type: {adapter_type!r}. "
+        f"Supported: lora, dora, rslora, adalora, loha, lokr, ia3, oft"
+    )
 
 
 # ------------------------------------------------------------------ #

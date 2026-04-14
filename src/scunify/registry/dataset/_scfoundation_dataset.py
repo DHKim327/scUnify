@@ -26,11 +26,13 @@ class ScFoundationDataset(Dataset):
 
     def __init__(self, adata, config):
         self.config = config
-        self.pad_token_id = config.model_param[config.inference["version"]]["mae_autobin"]["pad_token_id"]
+        model_cfg = config.get("model", {})
+        self.pad_token_id = config.model_param[model_cfg.get("version", "cell")]["mae_autobin"]["pad_token_id"]
         self.collator = None
         self.sampler = None
         # Force batch_size=1 (same as original paper)
-        if config.inference.get("batch_size", 1) != 1:
+        dl_cfg = config.get("dataloader", {})
+        if dl_cfg.get("batch_size", 1) != 1:
             raise ValueError("ScFoundationDataset only supports batch_size=1 (same as original paper)")
 
         # Load gene list (19264 target genes)
@@ -60,7 +62,7 @@ class ScFoundationDataset(Dataset):
         self.pre_normalized = config.preprocessing.get("option", "F")  # 'F', 'T', 'A'
 
         # tgthighres
-        tg = config.inference["tgthighres"]
+        tg = model_cfg.get("tgthighres", "t4")
         self.tg_mode = tg[0]  # 'f', 'a', or 't'
         self.tg_val = float(tg[1:])  # numeric value
 

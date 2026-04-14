@@ -1,5 +1,4 @@
 # UCE — model-specific configuration
-# Shared by both inference and training configs.
 
 model_name: UCE
 
@@ -10,11 +9,13 @@ preprocessing:
   filter_cells_min_genes: 25
   hv_genes: null
 
-inference:
-  seed: 0
-  nlayers: 4  # or 33
+model:
+  nlayers: 4
+
+dataloader:
   batch_size: 25
   num_workers: 0
+  seed: 0
 
 training:
   bep:

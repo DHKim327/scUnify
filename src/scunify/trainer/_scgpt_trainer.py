@@ -24,7 +24,7 @@ class ScGPTTrainer(BaseTrainer):
     def inject_lora(self, model: nn.Module) -> nn.Module:
         return inject_lora_to_model(model, "scgpt", self.lora_cfg)
 
-    def compute_loss(self, model: nn.Module, batch: dict) -> torch.Tensor:
+    def compute_pretraining_loss(self, model: nn.Module, batch: dict) -> torch.Tensor:
         """GEP + MVC loss on masked gene expression positions."""
         pad_token_id = batch["pad_token_id"]
         src_key_padding_mask = batch["gene"].eq(pad_token_id)
@@ -34,6 +34,18 @@ class ScGPTTrainer(BaseTrainer):
             src_key_padding_mask=src_key_padding_mask,
             target_values=batch["expr"],
         )
+
+    def get_cell_embedding(self, model: nn.Module, batch: dict) -> torch.Tensor:
+        """CLS token embedding (B, D). Ref: scGPT Tutorial_Annotation."""
+        m = self._unwrap(model)
+        pad_mask = batch["gene"].eq(batch["pad_token_id"])
+        return m.get_cell_embedding(batch["gene"], batch["masked_expr"], pad_mask)
+
+    def get_gene_embedding(self, model: nn.Module, batch: dict) -> torch.Tensor:
+        """Per-gene hidden states (B, S, D)."""
+        m = self._unwrap(model)
+        pad_mask = batch["gene"].eq(batch["pad_token_id"])
+        return m.get_gene_embedding(batch["gene"], batch["masked_expr"], pad_mask)
 
     # ------------------------------------------------------------------ #
     #  Embedding extraction (distributed, via BaseTrainer)

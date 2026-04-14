@@ -288,7 +288,7 @@ class ScUnifyRunner:
         progress = ProgressActor.remote()
         for t, n_gpus in zip(self.tasks, self.per_worker_gpus):
             task_name = t.get("task_name")
-            bs = int(t.get("inference").get("batch_size"))
+            bs = int(t.get("dataloader", {}).get("batch_size", 32))
             total_batches = None
             for rank in range(int(n_gpus)):
                 ray.get(progress.register.remote(task_name, rank, total_batches, bs))
@@ -349,8 +349,9 @@ class ScUnifyRunner:
         progress = TrainingProgressActor.remote()
         for t, n_gpus in zip(self.tasks, self.per_worker_gpus):
             task_name = t.get("task_name")
+            dl_cfg = t.get("dataloader", {})
             training_cfg = t.get("training", {})
-            bs = int(training_cfg.get("batch_size", 32))
+            bs = int(dl_cfg.get("batch_size", 32))
             total_epochs = int(training_cfg.get("epochs", 5))
             for rank in range(int(n_gpus)):
                 ray.get(progress.register.remote(task_name, rank, None, bs, total_epochs))
@@ -389,8 +390,17 @@ class ScUnifyRunner:
             t.t_load_d = t_load_data
             jobs.append(_launch_remote.remote(t, scaling_cfg, run_cfg, progress))
 
+        if self.verbose:
+            rows = ray.get(progress.snapshot.remote())
+            print(f"[DEBUG] Progress registered {len(rows)} rows: "
+                  f"{[(k, v.get('status')) for k, v in rows.items()]}")
+            print(f"[DEBUG] Starting TrainingProgressUI.run_until_complete()")
+
         ui = TrainingProgressUI(progress, refresh_hz=4, poll_interval=0.25)
         ui.run_until_complete()
+
+        if self.verbose:
+            print(f"[DEBUG] TrainingProgressUI finished")
 
         results = ray.get(jobs)
 

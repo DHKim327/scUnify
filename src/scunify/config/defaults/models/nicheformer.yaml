@@ -1,15 +1,11 @@
 # Nicheformer — model-specific configuration
-# Shared by both inference and training configs.
 
 model_name: Nicheformer
 
 preprocessing:
   use_raw_counts: true
 
-inference:
-  seed: 0
-  batch_size: 32
-  num_workers: 0
+model:
   emb_layer: -1
   species: human
   assay: 10x_3v3
@@ -17,6 +13,11 @@ inference:
   max_seq_len: 4096
   context_length: 1500
   ensembl_key: null
+
+dataloader:
+  batch_size: 32
+  num_workers: 0
+  seed: 0
 
 training:
   mlm:

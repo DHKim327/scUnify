@@ -1,13 +1,11 @@
 """Model-specific configuration creators.
 
-Structure (2026-03-20):
-    config/defaults/models/{model}.yaml     — model-specific (shared inference/training)
-    config/defaults/training_param.yaml     — training defaults (scPEFT-based)
-    config/defaults/system.yaml             — ray/accelerator defaults
+Structure:
+    config/defaults/models/{model}.yaml     — model-specific (preprocessing, inference, training loss, resources)
+    config/defaults/training_param.yaml     — training defaults (lora, optimizer, scheduler, split)
 
 Output:
-    config_dir/{model_lower}/inference.yaml  — model yaml as-is
-    config_dir/{model_lower}/train.yaml      — model yaml + training defaults merged
+    config_dir/{model_lower}.yaml           — single unified config (inference + training merged)
 """
 
 import copy
@@ -73,48 +71,38 @@ def _write_yaml(data: dict, output_path: Path):
 
 
 def create_config(model_name: str, resource_dir: Path, config_dir: Path):
-    """Create inference and training config files for a model.
+    """Create a single unified config file for a model.
 
-    Output structure:
-        config_dir/{model_lower}/inference.yaml
-        config_dir/{model_lower}/train.yaml
+    Output:
+        config_dir/{model_lower}.yaml
     """
     model_key = _MODEL_KEY_MAP.get(model_name)
     if model_key is None:
         raise ValueError(f"Unknown model: {model_name}")
 
     resource_str = str(resource_dir)
-    model_dir = config_dir / model_key
-    model_dir.mkdir(parents=True, exist_ok=True)
 
     # --- Load model template ---
     model_template = _DEFAULTS_DIR / "models" / f"{model_key}.yaml"
     if not model_template.exists():
-        print(f"  ⚠️  [{model_name}] model template not found: {model_template}")
+        print(f"  [WARNING] [{model_name}] model template not found: {model_template}")
         return
 
     model_data = _load_and_fill(model_template, resource_str)
 
-    # --- Inference: model data as-is ---
-    inf_path = model_dir / "inference.yaml"
-    _write_yaml(model_data, inf_path)
-    print(f"  ✅ [{model_name}] inference.yaml → {inf_path}")
-
-    # --- Training: model data + training defaults ---
+    # --- Merge with training defaults ---
     defaults_path = _DEFAULTS_DIR / "training_param.yaml"
     if defaults_path.exists():
         training_defaults = _load_yaml(defaults_path)
-        train_data = _deep_merge(model_data, training_defaults)
-        # Add mode marker
-        train_data["mode"] = "training"
+        merged = _deep_merge(model_data, training_defaults)
     else:
-        train_data = copy.deepcopy(model_data)
-        train_data["mode"] = "training"
-        print(f"  ⚠️  [{model_name}] training defaults not found: {defaults_path}")
+        merged = copy.deepcopy(model_data)
+        print(f"  [WARNING] [{model_name}] training defaults not found: {defaults_path}")
 
-    train_path = model_dir / "train.yaml"
-    _write_yaml(train_data, train_path)
-    print(f"  ✅ [{model_name}] train.yaml → {train_path}")
+    # --- Write single unified config ---
+    out_path = config_dir / f"{model_key}.yaml"
+    _write_yaml(merged, out_path)
+    print(f"  [{model_name}] config → {out_path}")
 
 
 # Config creator mapping — unified entry point per model

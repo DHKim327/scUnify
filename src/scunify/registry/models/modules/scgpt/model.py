@@ -99,10 +99,14 @@ class TransformerModel(nn.Module):
                     batch_first=True,
                     norm_scheme=self.norm_scheme,
                 )
-                self.transformer_encoder = TransformerEncoder(encoder_layers, nlayers)
+                self.transformer_encoder = TransformerEncoder(
+                    encoder_layers, nlayers, enable_nested_tensor=False,
+                )
         else:
             encoder_layers = TransformerEncoderLayer(d_model, nhead, d_hid, dropout, batch_first=True)
-            self.transformer_encoder = TransformerEncoder(encoder_layers, nlayers)
+            self.transformer_encoder = TransformerEncoder(
+                encoder_layers, nlayers, enable_nested_tensor=False,
+            )
 
         self.decoder = ExprDecoder(
             d_model,

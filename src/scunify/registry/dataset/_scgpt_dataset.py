@@ -10,7 +10,7 @@ from ..models.modules.scgpt.gene_tokenizer import GeneVocab
 class ScGPTDataset(Dataset):
     def __init__(self, adata, config):
         # Seed RNG to match Foundation behaviour (set_seed before embed_data)
-        seed = config.inference.get('seed', 0)
+        seed = config.get("dataloader", {}).get("seed", 0)
         np.random.seed(seed)
         torch.manual_seed(seed)
 

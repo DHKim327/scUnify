@@ -1,5 +1,4 @@
 # scFoundation — model-specific configuration
-# Shared by both inference and training configs.
 
 model_name: scFoundation
 
@@ -8,12 +7,15 @@ preprocessing:
   normalize_total: 10000.0
   log1p: true
 
-inference:
+model:
   version: cell
   pool_type: all
   tgthighres: t4
+
+dataloader:
   batch_size: 1
   num_workers: 0
+  seed: 0
 
 training:
   mae:

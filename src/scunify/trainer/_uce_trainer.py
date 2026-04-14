@@ -24,7 +24,7 @@ class UCETrainer(BaseTrainer):
     def inject_lora(self, model: nn.Module) -> nn.Module:
         return inject_lora_to_model(model, "uce", self.lora_cfg)
 
-    def compute_loss(self, model: nn.Module, batch: dict) -> torch.Tensor:
+    def compute_pretraining_loss(self, model: nn.Module, batch: dict) -> torch.Tensor:
         """Binary expression prediction loss."""
         return model(
             batch_sentences=batch["batch_sentences"],
@@ -32,6 +32,16 @@ class UCETrainer(BaseTrainer):
             target_genes=batch["target_genes"],
             target_labels=batch["target_labels"],
         )
+
+    def get_cell_embedding(self, model: nn.Module, batch: dict) -> torch.Tensor:
+        """CLS token embedding (B, D)."""
+        m = self._unwrap(model)
+        return m.get_cell_embedding(batch["batch_sentences"], batch["mask"])
+
+    def get_gene_embedding(self, model: nn.Module, batch: dict) -> torch.Tensor:
+        """Gene-level embedding (B, S, D)."""
+        m = self._unwrap(model)
+        return m.get_gene_embedding(batch["batch_sentences"], batch["mask"])
 
     # ------------------------------------------------------------------ #
     #  Embedding extraction (distributed, via BaseTrainer)

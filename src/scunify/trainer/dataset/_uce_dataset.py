@@ -36,12 +36,26 @@ class UCETrainingDataset(UCEDataset):
         super().__init__(adata, config)
         training_cfg = config.get("training", {})
         bep_cfg = training_cfg.get("bep", {})
+
+        # Label passthrough from adata.obs
+        self._label_arrays = {}
+        for key in training_cfg.get("label_keys", []):
+            if key in adata.obs.columns:
+                col = adata.obs[key]
+                self._label_arrays[key] = (
+                    col.cat.codes.values.copy()
+                    if hasattr(col, "cat")
+                    else col.values.copy()
+                )
         self.n_pos = int(bep_cfg.get("n_pos_targets", 100))
         self.n_neg = int(bep_cfg.get("n_neg_targets", 100))
         self.mask_ratio = float(bep_cfg.get("mask_ratio", 0.2))
 
         # Override collator with training-aware version
-        self.collator = UCETrainingCollator(self.args.pad_length)
+        self.collator = UCETrainingCollator(
+            self.args.pad_length,
+            label_keys=list(self._label_arrays.keys()),
+        )
 
     def __getitem__(self, idx):
         # ── Read counts and identify expressed / non-expressed genes ──
@@ -96,7 +110,7 @@ class UCETrainingDataset(UCEDataset):
             torch.zeros(self.n_neg),
         ])
 
-        return {
+        result = {
             "batch_sentences": batch_sentences,
             "mask": base_mask,
             "target_genes": target_genes,
@@ -104,17 +118,21 @@ class UCETrainingDataset(UCEDataset):
             "cid": torch.tensor(idx, dtype=torch.long),
             "seq_len": seq_len,
         }
+        for key, arr in self._label_arrays.items():
+            result[key] = torch.tensor(arr[idx], dtype=torch.long)
+        return result
 
 
 class UCETrainingCollator:
     """Custom collator for UCE training — dict format with dynamic padding."""
 
-    def __init__(self, pad_length):
+    def __init__(self, pad_length, label_keys=None):
         self.pad_length = pad_length
+        self._label_keys = label_keys or []
 
     def __call__(self, batch):
         max_len = max(b["seq_len"] for b in batch)
-        return {
+        result = {
             "batch_sentences": torch.stack(
                 [b["batch_sentences"].squeeze(0) for b in batch]
             )[:, :max_len],
@@ -127,3 +145,7 @@ class UCETrainingCollator:
                 [b["cid"] for b in batch], dtype=torch.long
             ),
         }
+        for key in self._label_keys:
+            if key in batch[0]:
+                result[key] = torch.stack([b[key] for b in batch])
+        return result

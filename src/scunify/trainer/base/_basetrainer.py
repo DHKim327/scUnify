@@ -38,21 +38,20 @@ class BaseTrainer(ABC):
         """Build dataloader. Training default: shuffle=True, drop_last=True."""
         from torch.utils.data import DataLoader
 
-        tcfg = self.training_cfg
-        bs = int(tcfg.get("batch_size", 32))
-        nw = int(tcfg.get("num_workers", 0))
+        dl_cfg = self.cfg.get("dataloader", {})
+        bs = int(dl_cfg.get("batch_size", 32))
+        nw = int(dl_cfg.get("num_workers", 0))
         collator = getattr(ds, "collator", None)
 
         def worker_init_fn(worker_id):
             import random
 
-            seed = tcfg.get("seed", 0)
+            seed = dl_cfg.get("seed", 0)
             np.random.seed(seed + worker_id)
             random.seed(seed + worker_id)
             torch.manual_seed(seed + worker_id)
 
-        return DataLoader(
-            ds,
+        dl_kwargs = dict(
             batch_size=bs,
             num_workers=nw,
             shuffle=shuffle,
@@ -61,6 +60,11 @@ class BaseTrainer(ABC):
             drop_last=drop_last,
             worker_init_fn=worker_init_fn if nw > 0 else None,
         )
+        if nw > 0:
+            dl_kwargs["persistent_workers"] = True
+            dl_kwargs["prefetch_factor"] = int(dl_cfg.get("prefetch_factor", 4))
+
+        return DataLoader(ds, **dl_kwargs)
 
     # ------------------------------------------------------------------ #
     #  Model
@@ -76,11 +80,44 @@ class BaseTrainer(ABC):
         ...
 
     # ------------------------------------------------------------------ #
-    #  Training
+    #  Utilities
+    # ------------------------------------------------------------------ #
+    @staticmethod
+    def _unwrap(model: nn.Module) -> nn.Module:
+        """Unwrap DDP/FSDP to access the underlying training wrapper."""
+        if hasattr(model, "module"):
+            return model.module
+        return model
+
+    # ------------------------------------------------------------------ #
+    #  Training — loss & embedding API
     # ------------------------------------------------------------------ #
     @abstractmethod
     def compute_loss(self, model: nn.Module, batch: dict) -> torch.Tensor:
-        """Compute self-supervised loss (MLM / GEP / MAE)."""
+        """Compute training loss. Provided by task Mixin (e.g. PretrainingMixin,
+        ClassificationMixin). Model trainers do NOT implement this directly."""
+        ...
+
+    @abstractmethod
+    def get_cell_embedding(
+        self, model: nn.Module, batch: dict
+    ) -> torch.Tensor:
+        """Extract cell-level embedding (B, D) with gradient flow.
+
+        Must NOT use ``torch.no_grad()``. Implementation delegates to
+        the training wrapper's ``get_cell_embedding()`` method.
+        """
+        ...
+
+    @abstractmethod
+    def get_gene_embedding(
+        self, model: nn.Module, batch: dict
+    ) -> torch.Tensor:
+        """Extract gene-level embedding (B, S, D) with gradient flow.
+
+        Must NOT use ``torch.no_grad()``. Implementation delegates to
+        the training wrapper's ``get_gene_embedding()`` method.
+        """
         ...
 
     def build_optimizer(self, model: nn.Module) -> Adam | AdamW:
@@ -247,7 +284,7 @@ class BaseTrainer(ABC):
         model_dirs = resources.get("model_dirs", {})
         if model_dirs:
             # Find which variant was used for training
-            variant = inf_cfg.get("inference", {}).get("model_variant")
+            variant = inf_cfg.get("model", {}).get("variant")
             if variant and variant in model_dirs:
                 model_dirs[variant] = str(merged_dir)
             else:

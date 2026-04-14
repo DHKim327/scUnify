@@ -8,7 +8,7 @@ class ScFoundationInferenceWrapper(ScFoundationWrapper):
 
     def __init__(self, config):
         super().__init__(config)
-        self.pool_type = config.inference["pool_type"]
+        self.pool_type = config.get("model", {}).get("pool_type", "all")
 
     def forward(self, x, x_padding, position_gene_ids):
         x = torch.unsqueeze(x, 2)

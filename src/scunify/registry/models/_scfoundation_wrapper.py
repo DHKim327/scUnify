@@ -22,13 +22,14 @@ from .modules.scfoundation.transformer import pytorchTransformerModule
 
 
 def load(config) -> torch.nn.Module:
-    model_param = load_yaml(config._architecture_dir)[config.inference["version"]]
+    version = config.get("model", {}).get("version", "cell")
+    model_param = load_yaml(config._architecture_dir)[version]
     model_name = list(model_param.keys())[0]
     params = model_param[model_name]
 
     model = build_model(model_name, params)
     state_dict = remove_model_prefix(
-        torch.load(config.resources["model_file"])[config.inference["version"]]["state_dict"]
+        torch.load(config.resources["model_file"])[version]["state_dict"]
     )
     model.load_state_dict(state_dict)
     return model

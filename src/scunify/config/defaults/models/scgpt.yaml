@@ -1,5 +1,4 @@
 # scGPT — model-specific configuration
-# Shared by both inference and training configs.
 
 model_name: scGPT
 
@@ -10,10 +9,12 @@ preprocessing:
   log1p: true
   subset_hvg: false
 
-inference:
-  seed: 0
+model: {}
+
+dataloader:
   batch_size: 64
   num_workers: 0
+  seed: 0
 
 training:
   gep:

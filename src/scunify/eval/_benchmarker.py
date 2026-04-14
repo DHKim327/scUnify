@@ -14,6 +14,8 @@ import pandas as pd
 
 from ._scib import ScibWrapper
 from ._scgraph import ScGraphWrapper
+from ._cka import CKAWrapper
+from ._n2o import N2OWrapper
 
 if TYPE_CHECKING:
     from anndata import AnnData
@@ -80,10 +82,14 @@ class Evaluator:
         # Lazy initialization
         self._scib: ScibWrapper | None = None
         self._scgraph: ScGraphWrapper | None = None
-        
+        self._cka: CKAWrapper | None = None
+        self._n2o: N2OWrapper | None = None
+
         self._scib_results: pd.DataFrame | None = None
         self._scgraph_results: pd.DataFrame | None = None
         self._combined_results: pd.DataFrame | None = None
+        self._cka_results: dict | None = None
+        self._n2o_results: dict | None = None
     
     @property
     def scib(self) -> ScibWrapper:
@@ -109,7 +115,99 @@ class Evaluator:
                 label_key=self.label_key,
             )
         return self._scgraph
-    
+
+    @property
+    def cka(self) -> CKAWrapper:
+        """CKAWrapper instance (lazily created)."""
+        if self._cka is None:
+            self._cka = CKAWrapper(
+                self.adata,
+                embedding_keys=self.embedding_keys,
+                label_key=self.label_key,
+            )
+        return self._cka
+
+    @property
+    def n2o(self) -> N2OWrapper:
+        """N2OWrapper instance (lazily created)."""
+        if self._n2o is None:
+            self._n2o = N2OWrapper(
+                self.adata,
+                embedding_keys=self.embedding_keys,
+                label_key=self.label_key,
+            )
+        return self._n2o
+
+    def run_cka(self) -> dict[str, pd.DataFrame]:
+        """Run CKA analysis (global + per-celltype).
+
+        Returns
+        -------
+        {"global": DataFrame, "per_celltype": DataFrame}
+        """
+        self._cka_results = self.cka.run()
+        return self._cka_results
+
+    def run_n2o(self) -> dict:
+        """Run N2O analysis (matrix + per-cell + per-celltype).
+
+        Returns
+        -------
+        {"matrix": DataFrame, "per_cell": ndarray, "per_celltype": DataFrame}
+        """
+        self._n2o_results = self.n2o.run()
+        return self._n2o_results
+
+    def run_multimodel(self) -> dict:
+        """Run CKA + N2O multi-model analysis.
+
+        Returns
+        -------
+        {"cka": dict, "n2o": dict}
+        """
+        print("=" * 50)
+        print("Running CKA analysis...")
+        print("=" * 50)
+        cka = self.run_cka()
+
+        print("\n" + "=" * 50)
+        print("Running N2O analysis...")
+        print("=" * 50)
+        n2o = self.run_n2o()
+
+        return {"cka": cka, "n2o": n2o}
+
+    def run_full(self) -> dict:
+        """Run all evaluations: scIB + scGraph + CKA + N2O.
+
+        Returns
+        -------
+        {"scib": DataFrame, "scgraph": DataFrame, "cka": dict, "n2o": dict}
+        """
+        result = {}
+
+        print("=" * 50)
+        print("Running scIB-metrics evaluation...")
+        print("=" * 50)
+        result["scib"] = self.run_scib()
+
+        print("\n" + "=" * 50)
+        print("Running scGraph evaluation...")
+        print("=" * 50)
+        result["scgraph"] = self.run_scgraph()
+
+        print("\n" + "=" * 50)
+        print("Running CKA analysis...")
+        print("=" * 50)
+        result["cka"] = self.run_cka()
+
+        print("\n" + "=" * 50)
+        print("Running N2O analysis...")
+        print("=" * 50)
+        result["n2o"] = self.run_n2o()
+
+        return result
+
     def run_scib(self, min_max_scale: bool = False) -> pd.DataFrame:
         """Run scIB-metrics evaluation.
         

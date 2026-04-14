@@ -75,11 +75,11 @@ def download_scgpt(resource_dir: Path) -> None:
 def download_uce(resource_dir: Path) -> None:
     """
     Download UCE weights and embeddings from Figshare
-    
-    ⚠️  NOTE: Figshare has blocked automated downloads. Please download manually:
-    1. Visit: https://figshare.com/articles/dataset/Universal_Cell_Embedding_Model_Files/24320806
-    2. Click "Download all" to download the files
-    3. Extract to the UCE directory
+
+    Downloads individual files via ndownloader.figshare.com direct links,
+    then extracts protein_embeddings.tar.gz and removes the archive.
+
+    Source: https://figshare.com/articles/dataset/Universal_Cell_Embedding_Model_Files/24320806
 
     Args:
         resource_dir: Base resource directory (e.g., ./resources)
@@ -87,32 +87,39 @@ def download_uce(resource_dir: Path) -> None:
     output_dir = resource_dir / "UCE"
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    print("⚠️  UCE Download Notice")
-    print("="*70)
-    print("Figshare has blocked automated script downloads (403 Forbidden).")
-    print("Please download UCE files manually:\n")
-    print("1. Visit: https://figshare.com/articles/dataset/24320806")
-    print(f"2. Download all files (Total: ~14 GB)")
-    print(f"3. Place files in: {output_dir}\n")
-    print("Required files:")
-    required_files = [
-        'species_offsets.pkl',
-        'species_chrom.csv',
-        '4layer_model.torch',
-        'all_tokens.torch',
-        'protein_embeddings.tar.gz',
-        '33l_8ep_1024t_1280.torch'
-    ]
-    for f in required_files:
-        print(f"   - {f}")
-    print("\nAfter downloading, extract protein_embeddings.tar.gz if needed.")
-    print("="*70)
-    
-    raise RuntimeError(
-        "UCE automatic download is currently blocked by Figshare. "
-        "Please download manually from: "
-        "https://figshare.com/articles/dataset/24320806"
-    )
+    print("📥 Downloading UCE from Figshare...")
+    print(f"   Output: {output_dir}")
+
+    # Figshare ndownloader direct links (from UCE/download.sh)
+    uce_files = {
+        "species_offsets.pkl": "https://ndownloader.figshare.com/files/42706555",
+        "species_chrom.csv": "https://ndownloader.figshare.com/files/42706558",
+        "4layer_model.torch": "https://ndownloader.figshare.com/files/42706576",
+        "all_tokens.torch": "https://ndownloader.figshare.com/files/42706585",
+        "protein_embeddings.tar.gz": "https://ndownloader.figshare.com/files/42715213",
+        "33l_8ep_1024t_1280.torch": "https://ndownloader.figshare.com/files/43423236",
+    }
+
+    # Download each file
+    for fname, url in uce_files.items():
+        save_path = output_dir / fname
+        _figshare_download(url, save_path)
+
+    # Extract protein_embeddings.tar.gz if not already extracted
+    pe_dir = output_dir / "protein_embeddings"
+    pe_tar = output_dir / "protein_embeddings.tar.gz"
+    if not pe_dir.is_dir() and pe_tar.exists():
+        print("📦 Extracting protein_embeddings.tar.gz...")
+        with tarfile.open(pe_tar) as tar:
+            tar.extractall(path=output_dir)
+        print("✅ Extraction completed!")
+
+    # Clean up tar.gz after successful extraction
+    if pe_dir.is_dir() and pe_tar.exists():
+        pe_tar.unlink()
+        print("🗑️  Removed protein_embeddings.tar.gz (extracted)")
+
+    print("\n✅ UCE download completed!")
 
 
 def download_scfoundation(resource_dir: Path) -> None:

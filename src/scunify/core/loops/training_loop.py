@@ -5,17 +5,19 @@ Parallel structure to ``inference_loop.py`` — same config/seed/GPU setup,
 but runs epoch-based training with LoRA + gradient accumulation.
 
 Supports two split modes:
-  - single split (column_key / random): one train/valid/test cycle
+  - single split: one train/valid/test cycle
   - kfold: held-out test + N folds, fresh model per fold
 
 Flow:
   1. Split adata → test + folds (or train/valid/test)
   2. Per fold: build model → LoRA → train → validate → checkpoint → embeddings
-  3. Save per-fold outputs (fold_N/adata.h5ad style)
+  3. Save per-fold outputs (fold_N/ style) + summary.json
 """
 
+import json
 import logging
 import os
+from pathlib import Path
 
 import numpy as np
 import ray
@@ -68,8 +70,12 @@ def _train_one_fold(
     train_ds = trainer.build_dataset(train_adata)
     train_dl = trainer.build_dataloader(train_ds)
 
-    valid_ds = trainer.build_dataset(valid_adata)
-    valid_dl = trainer.build_dataloader(valid_ds, shuffle=False, drop_last=False)
+    has_valid = len(valid_adata) > 0
+    if has_valid:
+        valid_ds = trainer.build_dataset(valid_adata)
+        valid_dl = trainer.build_dataloader(valid_ds, shuffle=False, drop_last=False)
+    else:
+        valid_dl = None
 
     # --------- Fresh model + LoRA per fold ---------
     model = trainer.build_model()
@@ -87,7 +93,8 @@ def _train_one_fold(
     model, optimizer, train_dl, scheduler = accelerator.prepare(
         model, optimizer, train_dl, scheduler
     )
-    valid_dl = accelerator.prepare(valid_dl)
+    if valid_dl is not None:
+        valid_dl = accelerator.prepare(valid_dl)
 
     # --------- Early Stopping ---------
     es_cfg = training_cfg.get("early_stopping", {})
@@ -97,7 +104,8 @@ def _train_one_fold(
     )
 
     # --------- Training ---------
-    bs = int(training_cfg.get("batch_size", 32))
+    dl_cfg = cfg.get("dataloader", {})
+    bs = int(dl_cfg.get("batch_size", 32))
     total_batches = len(train_dl)
     model.train()
 
@@ -109,6 +117,7 @@ def _train_one_fold(
     avg_loss = 0.0
     val_loss = float("inf")
     actual_epochs = 0
+    epoch_history = []
 
     for epoch in range(epochs):
         actual_epochs = epoch + 1
@@ -140,10 +149,30 @@ def _train_one_fold(
 
         avg_loss = epoch_loss / max(total_batches, 1)
 
-        # --------- Validation ---------
-        val_loss = _compute_val_loss(
-            model, trainer, valid_dl, accelerator
-        )
+        # --------- Validation (DDP-safe: all-reduce average) ---------
+        if valid_dl is not None:
+            progress.set_status.remote(task_name, accelerator.process_index, "VALIDATING")
+            val_loss = _compute_val_loss(
+                model, trainer, valid_dl, accelerator
+            )
+
+            # Sync val_loss across all workers so early stopping decision is identical
+            if accelerator.num_processes > 1:
+                _vl = torch.tensor([val_loss], device=accelerator.device)
+                torch.distributed.all_reduce(_vl, op=torch.distributed.ReduceOp.AVG)
+                val_loss = _vl.item()
+        else:
+            # No validation set — use train loss for logging
+            val_loss = avg_loss
+
+        # Record epoch history
+        lr_current = optimizer.param_groups[0].get("lr", 0.0)
+        epoch_history.append({
+            "epoch": epoch + 1,
+            "train_loss": round(avg_loss, 6),
+            "val_loss": round(val_loss, 6),
+            "lr": round(lr_current, 8),
+        })
 
         progress.update.remote(
             task_name,
@@ -172,7 +201,8 @@ def _train_one_fold(
             }
         )
 
-        if early_stopper.step(val_loss, epoch):
+        # Early stopping only when validation set exists
+        if valid_dl is not None and early_stopper.step(val_loss, epoch):
             logger.info(
                 f"[{task_name}] {fold_label} Early stopping at epoch {epoch + 1}"
             )
@@ -188,10 +218,12 @@ def _train_one_fold(
             fold_save_dir.mkdir(parents=True, exist_ok=True)
         else:
             fold_save_dir = cfg.save_dir
-        if training_cfg.get("save_checkpoint", True):
+        save_cfg = cfg.get("save", {})
+        if save_cfg.get("checkpoint", True):
             ckpt_dir = trainer.save_checkpoint(unwrapped, fold_save_dir)
-            merged_dir = trainer.merge_and_save(unwrapped, fold_save_dir)
             logger.info(f"[{task_name}] {fold_label or 'single'} Checkpoint: {ckpt_dir}")
+        if save_cfg.get("merged_model", True):
+            merged_dir = trainer.merge_and_save(unwrapped, fold_save_dir)
             logger.info(f"[{task_name}] {fold_label or 'single'} Merged: {merged_dir}")
 
     return {
@@ -203,6 +235,7 @@ def _train_one_fold(
         "early_stopper": early_stopper,
         "train_params": train_params,
         "total_params": total_params,
+        "epoch_history": epoch_history,
     }
 
 
@@ -214,24 +247,39 @@ def _extract_and_save_embeddings(
     train_adata,
     valid_adata,
     test_adata,
+    full_adata,
     cfg,
     task_name,
     fold_label,
     fold_results,
     timer,
 ):
-    """Extract embeddings per split, reassemble in original cell order, and save."""
+    """Extract embeddings and save.
+
+    When ``full_adata`` is provided and test is empty (self-supervised mode),
+    embeddings are extracted for the **entire** dataset in one pass.
+    Otherwise falls back to per-split extraction.
+    """
     model.eval()
     timer.start(f"embed_{fold_label}")
 
     unwrapped_model = accelerator.unwrap_model(model)
-    split_embeddings = {}
+    has_test = len(test_adata) > 0
 
-    for split_name, split_adata in [
-        ("train", train_adata),
-        ("valid", valid_adata),
-        ("test", test_adata),
-    ]:
+    if not has_test and full_adata is not None:
+        # Self-supervised mode: extract on full dataset at once
+        splits = [("all", full_adata)]
+    else:
+        splits = [
+            ("train", train_adata),
+            ("valid", valid_adata),
+            ("test", test_adata),
+        ]
+
+    split_embeddings = {}
+    for split_name, split_adata in splits:
+        if len(split_adata) == 0:
+            continue
         emb = trainer.extract_embeddings(
             unwrapped_model, split_adata, accelerator
         )
@@ -246,32 +294,43 @@ def _extract_and_save_embeddings(
     if not accelerator.is_main_process or not split_embeddings:
         return 0, 0, t_embed
 
-    # Collect embeddings + orig indices + labels per split
-    emb_parts = []
-    idx_parts = []
-    label_parts = []
-    for s_name, s_adata in [
-        ("train", train_adata),
-        ("valid", valid_adata),
-        ("test", test_adata),
-    ]:
-        if s_name in split_embeddings:
-            emb_parts.append(split_embeddings[s_name])
-            idx_parts.append(
-                s_adata.obs["_scunify_orig_idx"].values
-            )
-            label_parts.append(
-                np.full(split_embeddings[s_name].shape[0], s_name)
-            )
+    # --- Reassemble in original cell order ---
+    if "all" in split_embeddings:
+        # Full-dataset extraction: already in order
+        all_emb = split_embeddings["all"]
+        # Split labels: mark train/valid based on orig_idx
+        train_idx_set = set(train_adata.obs["_scunify_orig_idx"].values)
+        split_labels = np.array([
+            "train" if i in train_idx_set else "valid"
+            for i in full_adata.obs["_scunify_orig_idx"].values
+        ])
+    else:
+        # Per-split extraction: collect and sort
+        emb_parts = []
+        idx_parts = []
+        label_parts = []
+        for s_name, s_adata in [
+            ("train", train_adata),
+            ("valid", valid_adata),
+            ("test", test_adata),
+        ]:
+            if s_name in split_embeddings:
+                emb_parts.append(split_embeddings[s_name])
+                idx_parts.append(
+                    s_adata.obs["_scunify_orig_idx"].values
+                )
+                label_parts.append(
+                    np.full(split_embeddings[s_name].shape[0], s_name)
+                )
 
-    concat_emb = np.concatenate(emb_parts, axis=0)
-    concat_idx = np.concatenate(idx_parts)
-    concat_labels = np.concatenate(label_parts)
+        concat_emb = np.concatenate(emb_parts, axis=0)
+        concat_idx = np.concatenate(idx_parts)
+        concat_labels = np.concatenate(label_parts)
 
-    # Sort by original index to restore adata cell order
-    sort_order = np.argsort(concat_idx)
-    all_emb = concat_emb[sort_order]
-    split_labels = concat_labels[sort_order]
+        # Sort by original index to restore adata cell order
+        sort_order = np.argsort(concat_idx)
+        all_emb = concat_emb[sort_order]
+        split_labels = concat_labels[sort_order]
 
     n_obs, n_dim = all_emb.shape
 
@@ -315,6 +374,70 @@ def _extract_and_save_embeddings(
     return n_obs, n_dim, t_embed
 
 
+def _save_summary(cfg, all_fold_results, *, t_total, t_load_d,
+                   gpu_util_mean, gpu_util_max, gpu_mem_peak):
+    """Save summary.json with epoch-level history and aggregate metrics."""
+    save_dir = Path(cfg.save_dir)
+    save_dir.mkdir(parents=True, exist_ok=True)
+
+    training_cfg = cfg.get("training", {})
+    split_cfg = training_cfg.get("split", {})
+
+    folds_summary = []
+    for r in all_fold_results:
+        folds_summary.append({
+            "fold": r.get("fold_label", "single"),
+            "actual_epochs": r["actual_epochs"],
+            "final_train_loss": round(r["avg_loss"], 6),
+            "final_val_loss": round(r["val_loss"], 6),
+            "best_val_loss": round(r["early_stopper"].best_loss, 6),
+            "best_epoch": r["early_stopper"].best_epoch + 1,
+            "early_stopped": r["actual_epochs"] < int(training_cfg.get("epochs", 50)),
+            "trainable_params": r["train_params"],
+            "total_params": r["total_params"],
+            "epoch_history": r["epoch_history"],
+        })
+
+    val_losses = [r["val_loss"] for r in all_fold_results]
+    best_val_losses = [r["early_stopper"].best_loss for r in all_fold_results]
+
+    summary = {
+        "task_name": cfg.get("task_name"),
+        "model_name": cfg.get("model_name"),
+        "config": {
+            "lora": training_cfg.get("lora", {}),
+            "optimizer": training_cfg.get("optimizer", {}),
+            "scheduler": training_cfg.get("scheduler", {}),
+            "early_stopping": training_cfg.get("early_stopping", {}),
+            "split": split_cfg,
+            "epochs": int(training_cfg.get("epochs", 50)),
+            "batch_size": int(cfg.get("dataloader", {}).get("batch_size", 32)),
+        },
+        "results": {
+            "n_folds": len(all_fold_results),
+            "mean_val_loss": round(float(np.mean(val_losses)), 6),
+            "std_val_loss": round(float(np.std(val_losses)), 6),
+            "mean_best_val_loss": round(float(np.mean(best_val_losses)), 6),
+            "per_fold": folds_summary,
+        },
+        "timing": {
+            "t_total": round(t_total, 3),
+            "t_load_data": round(t_load_d, 3),
+        },
+        "gpu": {
+            "util_mean": round(gpu_util_mean, 1),
+            "util_max": round(gpu_util_max, 1),
+            "mem_peak_bytes": int(gpu_mem_peak),
+        },
+    }
+
+    out_path = save_dir / "summary.json"
+    with open(out_path, "w") as f:
+        json.dump(summary, f, indent=2, ensure_ascii=False)
+
+    logger.info(f"[{cfg.get('task_name')}] Summary saved: {out_path}")
+
+
 # ------------------------------------------------------------------ #
 #  Main entry point
 # ------------------------------------------------------------------ #
@@ -332,7 +455,7 @@ def training_loop_per_worker(training_loop_config):
     import random
 
     training_cfg = cfg.get("training", {})
-    seed = training_cfg.get("seed", 42)
+    seed = cfg.get("dataloader", {}).get("seed", 42)
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
@@ -386,9 +509,8 @@ def training_loop_per_worker(training_loop_config):
     # --------- Split ---------
     split_cfg = training_cfg.get("split", {})
     splitter = DataSplitter(split_cfg)
-    method = split_cfg.get("method", "column_key")
 
-    if method == "kfold":
+    if splitter.n_folds > 1:
         _run_kfold(
             trainer=trainer,
             splitter=splitter,
@@ -423,7 +545,7 @@ def training_loop_per_worker(training_loop_config):
 
 
 # ------------------------------------------------------------------ #
-#  Single split path (original behavior)
+#  Single split path
 # ------------------------------------------------------------------ #
 
 def _run_single(
@@ -442,7 +564,7 @@ def _run_single(
     monitor,
     t_load_d,
 ):
-    """Original single-split training path."""
+    """Single-split training path."""
     timer.start("load(d)")
     train_adata, valid_adata, test_adata = splitter.split(adata)
     t_load_ds = timer.stop("load(d)")
@@ -467,7 +589,9 @@ def _run_single(
     # --------- Embedding extraction ---------
     n_obs = n_dim = 0
     t_embed = 0.0
-    if training_cfg.get("extract_embeddings", True):
+    save_cfg = cfg.get("save", {})
+    output_keys = save_cfg.get("output_keys", [])
+    if output_keys:
         ray.get(
             progress.set_status.remote(task_name, local_rank, "EVAL")
         )
@@ -478,6 +602,7 @@ def _run_single(
             train_adata=train_adata,
             valid_adata=valid_adata,
             test_adata=test_adata,
+            full_adata=adata,
             cfg=cfg,
             task_name=task_name,
             fold_label="",
@@ -491,6 +616,16 @@ def _run_single(
     if util_mean is None:
         util_mean = util_max = mem_max = 0
     t_total = timer.stop("total")
+
+    # --------- Save summary.json ---------
+    if accelerator.is_main_process:
+        fold_results["fold_label"] = "single"
+        _save_summary(
+            cfg, [fold_results],
+            t_total=t_total, t_load_d=t_load_d,
+            gpu_util_mean=util_mean, gpu_util_max=util_max,
+            gpu_mem_peak=mem_max,
+        )
 
     ray_train.report(
         {
@@ -575,7 +710,9 @@ def _run_kfold(
         # --------- Per-fold embedding extraction ---------
         n_obs = n_dim = 0
         t_embed = 0.0
-        if training_cfg.get("extract_embeddings", True):
+        save_cfg = cfg.get("save", {})
+        output_keys = save_cfg.get("output_keys", [])
+        if output_keys:
             ray.get(
                 progress.set_status.remote(
                     task_name, local_rank, f"EVAL {fold_label}"
@@ -588,6 +725,7 @@ def _run_kfold(
                 train_adata=train_adata,
                 valid_adata=valid_adata,
                 test_adata=test_adata,
+                full_adata=adata,
                 cfg=cfg,
                 task_name=task_name,
                 fold_label=fold_label,
@@ -595,6 +733,7 @@ def _run_kfold(
                 timer=timer,
             )
 
+        fold_results["fold_label"] = fold_label
         fold_results["t_train"] = t_fold_train
         fold_results["t_embed"] = t_embed
         fold_results["n_obs"] = n_obs
@@ -624,6 +763,15 @@ def _run_kfold(
     if util_mean is None:
         util_mean = util_max = mem_max = 0
     t_total = timer.stop("total")
+
+    # --------- Save summary.json ---------
+    if accelerator.is_main_process:
+        _save_summary(
+            cfg, all_fold_results,
+            t_total=t_total, t_load_d=t_load_d,
+            gpu_util_mean=util_mean, gpu_util_max=util_max,
+            gpu_mem_peak=mem_max,
+        )
 
     avg_val_losses = [r["val_loss"] for r in all_fold_results]
     best_val_losses = [r["early_stopper"].best_loss for r in all_fold_results]

@@ -71,7 +71,7 @@ class NicheformerDataset(Dataset):
 
     def __init__(self, adata, config):
         resources = config.get("resources", {})
-        inference_cfg = config.get("inference", {})
+        model_cfg = config.get("model", {})
 
         # ── Gene reference ──────────────────────────────────────────
         gene_ref_path = resources["gene_ref_file"]
@@ -85,11 +85,11 @@ class NicheformerDataset(Dataset):
         self.tech_mean = tech_mean
 
         # ── Gene symbol → ENSEMBL ID conversion ─────────────────────
-        ensembl_key = inference_cfg.get("ensembl_key", None)
+        ensembl_key = model_cfg.get("ensembl_key", None)
         adata = _ensure_ensembl_var_names(
             adata,
             ensembl_key=ensembl_key,
-            species=inference_cfg.get("species", "human"),
+            species=model_cfg.get("species", "human"),
         )
 
         # ── Lazy gene alignment: index mapping instead of ad.concat ──
@@ -112,16 +112,16 @@ class NicheformerDataset(Dataset):
 
         # ── Context tokens ──────────────────────────────────────────
         self.species_token = _resolve_token(
-            inference_cfg.get("species", "human"), SPECIES_TOKENS, "species"
+            model_cfg.get("species", "human"), SPECIES_TOKENS, "species"
         )
         self.assay_token = _resolve_token(
-            inference_cfg.get("assay", "10x_3v3"), ASSAY_TOKENS, "assay"
+            model_cfg.get("assay", "10x_3v3"), ASSAY_TOKENS, "assay"
         )
         self.modality_token = _resolve_token(
-            inference_cfg.get("modality", "dissociated"), MODALITY_TOKENS, "modality"
+            model_cfg.get("modality", "dissociated"), MODALITY_TOKENS, "modality"
         )
-        self.context_length = inference_cfg.get("context_length", 1500)
-        self.max_seq_len = inference_cfg.get("max_seq_len", 4096)
+        self.context_length = model_cfg.get("context_length", 1500)
+        self.max_seq_len = model_cfg.get("max_seq_len", 4096)
 
         self.n_cells = adata.n_obs
         self.sampler = SequentialSampler(self)
@@ -236,8 +236,19 @@ def _ensure_ensembl_var_names(adata, ensembl_key=None, species="human"):
     logger.info(f"Converting gene symbols → ENSEMBL IDs via pyensembl (species={species})")
     release_num = _ENSEMBL_RELEASE.get(species, 110)
     ensembl = EnsemblRelease(release=release_num, species=_PYENSEMBL_SPECIES.get(species, "human"))
-    ensembl.download()
-    ensembl.index()
+
+    # DDP-safe: only rank 0 builds the SQLite DB, others wait
+    import torch.distributed as dist
+    if dist.is_initialized():
+        if dist.get_rank() == 0:
+            ensembl.download()
+            ensembl.index()
+        dist.barrier()
+        if dist.get_rank() != 0:
+            ensembl.index()
+    else:
+        ensembl.download()
+        ensembl.index()
 
     symbol_to_id = {}
     for gene_name in adata.var_names:

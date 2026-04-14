@@ -79,6 +79,18 @@ class ScGPTTrainingWrapper(ScGPTWrapper):
         return loss
 
     # ------------------------------------------------------------------ #
+    #  Embedding access (gradient flow preserved for downstream tasks)
+    # ------------------------------------------------------------------ #
+    def get_cell_embedding(self, gene, masked_expr, src_key_padding_mask):
+        """CLS token embedding (B, D). Ref: scGPT Tutorial_Annotation."""
+        hidden = self.model._encode(gene, masked_expr, src_key_padding_mask)
+        return hidden[:, 0, :]  # CLS token
+
+    def get_gene_embedding(self, gene, masked_expr, src_key_padding_mask):
+        """Per-gene hidden states (B, S, D)."""
+        return self.model._encode(gene, masked_expr, src_key_padding_mask)
+
+    # ------------------------------------------------------------------ #
     #  Embedding extraction (post-training, same as inference wrapper)
     # ------------------------------------------------------------------ #
     def _forward_embedding(self, gene, expr, src_key_padding_mask):

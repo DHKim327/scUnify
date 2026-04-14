@@ -11,9 +11,9 @@ class GeneformerWrapper(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.model = load(config)
-        inference_cfg = config.get("inference", {})
-        self.emb_layer = inference_cfg.get("emb_layer", -1)
-        self.emb_mode = inference_cfg.get("emb_mode", "cls")
+        model_cfg = config.get("model", {})
+        self.emb_layer = model_cfg.get("emb_layer", -1)
+        self.emb_mode = model_cfg.get("emb_mode", "cls")
 
         num_layers = self.model.config.num_hidden_layers
         self._layer_to_quant = num_layers + self.emb_layer
@@ -23,8 +23,8 @@ def load(config):
     """Load Geneformer model with output_hidden_states=True."""
     from transformers import BertForMaskedLM
 
-    inference_cfg = config.get("inference", {})
-    variant = inference_cfg.get("model_variant", "V2-104M")
+    model_cfg = config.get("model", {})
+    variant = model_cfg.get("variant", "V2-104M")
     resources = config.get("resources", {})
     model_dir = resources["model_dirs"][variant]
     model = BertForMaskedLM.from_pretrained(

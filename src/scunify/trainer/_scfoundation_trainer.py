@@ -24,7 +24,7 @@ class ScFoundationTrainer(BaseTrainer):
     def inject_lora(self, model: nn.Module) -> nn.Module:
         return inject_lora_to_model(model, "scfoundation", self.lora_cfg)
 
-    def compute_loss(self, model: nn.Module, batch: dict) -> torch.Tensor:
+    def compute_pretraining_loss(self, model: nn.Module, batch: dict) -> torch.Tensor:
         """MAE reconstruction loss — MSE on masked gene positions."""
         return model(
             x=batch["x"],
@@ -36,6 +36,23 @@ class ScFoundationTrainer(BaseTrainer):
             decoder_data_padding_labels=batch["decoder_data_padding_labels"],
             mask_labels=batch["mask_labels"],
             targets=batch["targets"],
+        )
+
+    def get_cell_embedding(self, model: nn.Module, batch: dict) -> torch.Tensor:
+        """Encoder output mean-pooled (B, D).
+        Ref: Hao et al., Nature Methods 2024."""
+        m = self._unwrap(model)
+        return m.get_cell_embedding(
+            batch["x"], batch["padding_label"],
+            batch["encoder_position_gene_ids"], batch["encoder_labels"],
+        )
+
+    def get_gene_embedding(self, model: nn.Module, batch: dict) -> torch.Tensor:
+        """Encoder per-gene output (B, S, D)."""
+        m = self._unwrap(model)
+        return m.get_gene_embedding(
+            batch["x"], batch["padding_label"],
+            batch["encoder_position_gene_ids"], batch["encoder_labels"],
         )
 
     # ------------------------------------------------------------------ #

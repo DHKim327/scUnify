@@ -32,8 +32,19 @@ class ScFoundationTrainingDataset(ScFoundationDataset):
         super().__init__(adata, config)
         training_cfg = config.get("training", {})
         mae_cfg = training_cfg.get("mae", {})
+
+        # Label passthrough from adata.obs
+        self._label_arrays = {}
+        for key in training_cfg.get("label_keys", []):
+            if key in adata.obs.columns:
+                col = adata.obs[key]
+                self._label_arrays[key] = (
+                    col.cat.codes.values.copy()
+                    if hasattr(col, "cat")
+                    else col.values.copy()
+                )
         self.mask_ratio = float(mae_cfg.get("mask_ratio", 0.4))
-        self.mask_token_id = config.model_param[config.inference["version"]][
+        self.mask_token_id = config.model_param[config.get("model", {}).get("version", "cell")][
             "mae_autobin"
         ]["mask_token_id"]
 
@@ -127,7 +138,7 @@ class ScFoundationTrainingDataset(ScFoundationDataset):
             pretrain_gene_x, value_labels, self.pad_token_id
         )
 
-        return {
+        result = {
             # Encoder inputs
             "x": x_enc.squeeze(0),
             "padding_label": enc_padding.squeeze(0),
@@ -142,3 +153,6 @@ class ScFoundationTrainingDataset(ScFoundationDataset):
             "targets": x_targets.squeeze(0),
             "cid": torch.tensor(idx, dtype=torch.long),
         }
+        for key, arr in self._label_arrays.items():
+            result[key] = torch.tensor(arr[idx], dtype=torch.long)
+        return result
