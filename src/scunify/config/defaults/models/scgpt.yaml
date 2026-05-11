@@ -8,6 +8,11 @@ preprocessing:
   normalize_total: 10000.0
   log1p: true
   subset_hvg: false
+  # Paper recipe per task:
+  #   Annotation / Multiomics: false (default — feed only non-zero genes)
+  #   Integration (BC):        true  (feed all genes including zeros — DSBN/MVC)
+  #   Perturbation:            "all" (special handling)
+  include_zero_gene: false
 
 model: {}
 

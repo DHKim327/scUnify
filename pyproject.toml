@@ -29,11 +29,15 @@ dependencies = []
 # scUnify[core]: Master 전용 (경량!)
 # numpy/scanpy/scipy는 Worker 환경에서 관리
 optional-dependencies.core = [
-  "ray[default,train]==2.54.0",  # Runner, Task 
+  "ray[default,train]==2.54.0",  # Runner, Task
   "rich>=13.0",                 # ProgressUI
   "pyyaml>=6.0",                # config 파일
   "nvidia-ml-py>=11.450",       # GPU 모니터링 (pynvml)
   "tqdm>=4.60",                 # 진행 표시
+  # peft (worker dep) pulls transformers as a transitive. Without this pin
+  # pip latches onto current PyPI latest (5.8.x) which drags torch 2.11 +
+  # cu13 nvidia libs and breaks libtorchtext.so ABI inside scunify_perturb.
+  "transformers==5.4.0",
 ]
 
 # scUnify[eval]: 평가 전용 (inference와 독립)

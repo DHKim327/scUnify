@@ -172,13 +172,13 @@ class ScUnifyRunner:
         if hasattr(self, 'data_actors') and self.data_actors:
             if self.verbose:
                 print("[Runner] Cleaning up DataLoader Actors...")
-            for model_name, actor in self.data_actors.items():
+            for key, actor in self.data_actors.items():
                 try:
                     ray.get(actor.clear_cache.remote())
                     ray.kill(actor)
                 except Exception as e:
                     if self.verbose:
-                        print(f"  - Failed to cleanup {model_name} actor: {e}")
+                        print(f"  - Failed to cleanup {key[0]}/{key[1]} actor: {e}")
             self.data_actors = {}
         
         if ray.is_initialized():
@@ -193,34 +193,37 @@ class ScUnifyRunner:
                     print(f"[Runner.cleanup] Failed to remove {p}: {e}")
 
     def _create_data_actors(self) -> dict:
-        """Create per-model DataLoader actors.
+        """Create per-(model, env) DataLoader actors.
 
-        Each model environment (scunify_scgpt, scunify_uce, scunify_scfoundation)
-        gets a dedicated actor so that workers within the same environment can
-        share data via zero-copy reads from the Ray Object Store.
+        Actors are keyed by (model_name, env_name) so that tasks sharing both
+        the backbone and conda env reuse a single actor (zero-copy reads via
+        Ray Object Store). Tasks with the same model_name but different envs
+        (e.g. ``scGPT`` integration in ``scunify_scgpt`` vs ``scGPT``
+        perturbation in ``scunify_perturb``) get separate actors so each one
+        runs inside the env that has the deps it needs.
 
         Returns:
-            dict: {model_name: DataLoaderActor} mapping.
+            dict: {(model_name, env_name): DataLoaderActor} mapping.
         """
-        model_names = set(t.get("model_name") for t in self.tasks)
-        
+        actor_specs = set(
+            (t.get("model_name"), self._resolve_env_name(t)) for t in self.tasks
+        )
+
         actors = {}
-        for model_name in model_names:
-            env_name = f"scunify_{model_name.lower()}"
-            
+        for model_name, env_name in actor_specs:
             if self.verbose:
                 print(f"[Runner] Creating DataLoader Actor for {model_name} (env: {env_name})...")
-            
+
             actor = DataLoaderActor.options(
                 runtime_env={
                     "conda": env_name,
                     "env_vars": {"MPLBACKEND": "Agg"},
                 },
-                name=f"data_loader_{model_name.lower()}",
+                name=f"data_loader_{model_name.lower()}_{env_name}",
             ).remote()
-            
-            actors[model_name] = actor
-        
+
+            actors[(model_name, env_name)] = actor
+
         return actors
 
     def _prepare_adata_payloads(self) -> float:
@@ -235,37 +238,35 @@ class ScUnifyRunner:
         t0 = time.time()
         
         self.data_actors = self._create_data_actors()
-        
-        # Group required data paths by model
-        model_paths: dict[str, set[str]] = {}
+
+        # Group required data paths by (model_name, env_name)
+        actor_paths: dict[tuple[str, str], set[str]] = {}
         for t in self.tasks:
-            model_name = t.get("model_name")
+            key = (t.get("model_name"), self._resolve_env_name(t))
             path = str(t.adata_dir)
-            if model_name not in model_paths:
-                model_paths[model_name] = set()
-            model_paths[model_name].add(path)
-        
+            actor_paths.setdefault(key, set()).add(path)
+
         # Preload data in each actor
         preload_futures = {}
-        for model_name, paths in model_paths.items():
-            actor = self.data_actors[model_name]
+        for key, paths in actor_paths.items():
+            actor = self.data_actors[key]
             if self.verbose:
-                print(f"[Runner] Preloading {len(paths)} dataset(s) for {model_name}...")
-            preload_futures[model_name] = actor.preload.remote(list(paths))
-        
+                print(f"[Runner] Preloading {len(paths)} dataset(s) for {key[0]} ({key[1]})...")
+            preload_futures[key] = actor.preload.remote(list(paths))
+
         # Wait for preload completion and store refs
-        self.adata_refs: dict[str, dict[str, Any]] = {}
-        for model_name, future in preload_futures.items():
-            self.adata_refs[model_name] = ray.get(future)
+        self.adata_refs: dict[tuple[str, str], dict[str, Any]] = {}
+        for key, future in preload_futures.items():
+            self.adata_refs[key] = ray.get(future)
             if self.verbose:
-                print(f"[Runner] {model_name} data loaded!")
-        
+                print(f"[Runner] {key[0]} ({key[1]}) data loaded!")
+
         # Assign adata_ref to each task
         for t in self.tasks:
-            model_name = t.get("model_name")
+            key = (t.get("model_name"), self._resolve_env_name(t))
             path = str(t.adata_dir)
-            t.adata_ref = self.adata_refs[model_name][path]
-        
+            t.adata_ref = self.adata_refs[key][path]
+
         return time.time() - t0
 
     # -------------------- Execution --------------------
@@ -410,12 +411,10 @@ class ScUnifyRunner:
         return results
 
     def _postprocess_results(self) -> None:
-        """Merge per-task .npy embeddings into AnnData objects and save as .h5ad.
+        """Post-process training/inference results.
 
-        Groups tasks by their source adata path, loads the original AnnData once
-        per dataset, inserts each model's embedding into ``adata.obsm["X_{model}"]``,
-        writes the consolidated ``.h5ad`` to the task's ``save_dir``, and removes
-        the intermediate ``.npy`` files.
+        Training mode: outputs are already saved as .h5ad by the training loop.
+        Inference mode: merge .npy embeddings into AnnData and save as .h5ad.
         """
         import numpy as np
         import anndata as ad
@@ -429,48 +428,62 @@ class ScUnifyRunner:
             if self.verbose:
                 print(f"[Runner] Post-processing: {Path(adata_path).name}")
 
-            adata = ad.read_h5ad(adata_path)
-
             for t in task_list:
-                model_name = t.get("model_name").lower()
-                obsm_key = f"X_{model_name}"
-                npy_path = t.save_dir / f"{t.task_name}.npy"
-                splits_path = t.save_dir / f"{t.task_name}_splits.npy"
+                task_name = t.task_name
 
-                if npy_path.exists():
-                    embedding = np.load(str(npy_path))
+                # --- Training mode: .h5ad already saved by training loop ---
+                # Check direct h5ad (single fold)
+                h5ad_direct = t.save_dir / f"{task_name}.h5ad"
+                if h5ad_direct.exists():
+                    if self.verbose:
+                        print(f"  - {task_name}: {h5ad_direct}")
+                    continue
+
+                # Check fold h5ads (kfold)
+                fold_h5ads = sorted(t.save_dir.glob(f"*/{task_name}.h5ad"))
+                if fold_h5ads:
+                    if self.verbose:
+                        for f in fold_h5ads:
+                            print(f"  - {task_name}: {f}")
+                    continue
+
+                # --- Inference mode fallback: .npy → .h5ad ---
+                npy_direct = t.save_dir / f"{task_name}.npy"
+                if npy_direct.exists():
+                    model_name = t.get("model_name").lower()
+                    adata = ad.read_h5ad(adata_path)
+                    obsm_key = f"X_{model_name}"
+                    embedding = np.load(str(npy_direct))
                     adata.obsm[obsm_key] = embedding
                     if self.verbose:
                         print(f"  - Loaded {obsm_key}: {embedding.shape}")
+                    out_path = t.save_dir / Path(adata_path).name
+                    adata.write_h5ad(out_path)
+                    if self.verbose:
+                        print(f"  - Saved: {out_path}")
+                    del adata
                 else:
                     if self.verbose:
-                        print(f"  - [WARNING] {npy_path} not found, skipping {obsm_key}")
-
-                # Load split labels if available (training mode)
-                if splits_path.exists():
-                    split_labels = np.load(str(splits_path), allow_pickle=True)
-                    adata.obs["_scunify_split"] = split_labels
-                    if self.verbose:
-                        print(f"  - Loaded split labels: {dict(zip(*np.unique(split_labels, return_counts=True)))}")
-
-            out_dir = task_list[0].save_dir
-            out_path = out_dir / Path(adata_path).name
-            adata.write_h5ad(out_path)
-            if self.verbose:
-                print(f"  - Saved: {out_path}")
-
-            for t in task_list:
-                for suffix in [".npy", "_splits.npy"]:
-                    p = t.save_dir / f"{t.task_name}{suffix}"
-                    if p.exists():
-                        p.unlink()
-                        if self.verbose:
-                            print(f"  - Removed: {p}")
-
-            del adata
+                        print(f"  - {task_name}: no output found, skipping")
 
         if self.verbose:
             print("[Runner] Post-processing complete.")
+
+    def _resolve_env_name(self, task_cfg) -> str:
+        """Resolve conda env name for a task.
+
+        Priority: yaml ``env`` key > backbone-default ``scunify_<model_name>``.
+
+        Used to support task-specific envs (e.g. ``scunify_perturb`` shared by
+        scGPT and scFoundation perturbation tasks).
+        """
+        env = task_cfg.get("env")
+        if env:
+            return str(env)
+        model_name = task_cfg.get("model_name")
+        if not model_name:
+            raise ValueError(f"Task configuration missing both 'env' and 'model_name': {task_cfg}")
+        return f"scunify_{model_name.lower()}"
 
     def _get_runtime_env(self, task_cfg) -> dict:
         """Return the conda runtime_env for a given task.
@@ -480,19 +493,24 @@ class ScUnifyRunner:
             No subprocess calls are made here; Ray handles env activation.
 
         Args:
-            task_cfg: Task configuration containing ``model_name``.
+            task_cfg: Task configuration containing ``model_name`` and optionally ``env``.
 
         Returns:
             Runtime env dict for Ray.
         """
-        model_name = task_cfg.get("model_name")
-        if not model_name:
-            raise ValueError(f"Task configuration missing 'model_name': {task_cfg}")
-        
-        env_name = f"scunify_{model_name.lower()}"
-        
-        # Task-level runtime_env: conda env name only.
-        # Env existence is verified at setup(); delegated to Ray here.
+        import os
+
+        env_name = self._resolve_env_name(task_cfg)
+
+        # Propagate user-side mixin search paths set by ScUnifyConfig to the
+        # worker (which spawns in a fresh conda env and otherwise loses the
+        # main-process env vars).
+        env_vars = {"MPLBACKEND": "Agg"}
+        user_codes = os.environ.get("SCUNIFY_USER_CODES_PATHS")
+        if user_codes:
+            env_vars["SCUNIFY_USER_CODES_PATHS"] = user_codes
+
         return {
             "conda": env_name,
+            "env_vars": env_vars,
         }

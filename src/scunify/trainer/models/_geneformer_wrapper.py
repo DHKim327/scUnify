@@ -25,26 +25,31 @@ class GeneformerTrainingWrapper(GeneformerWrapper):
     #  Embedding access (gradient flow preserved for downstream tasks)
     # ------------------------------------------------------------------ #
     def get_cell_embedding(self, input_ids, attention_mask):
-        """Mean-pooled hidden states (B, D). Geneformer has no CLS token.
-        Ref: Theodoris et al., Nature 2023."""
+        """Cell embedding based on config emb_mode.
+        Ref: Geneformer emb_extractor.py — supports 'cls' and 'cell' (mean pool).
+        """
         outputs = self.model(
             input_ids=input_ids,
             attention_mask=attention_mask,
             output_hidden_states=True,
         )
         hidden = outputs.hidden_states[self._layer_to_quant]
-        # Mean pooling excluding CLS and EOS positions
-        mask = attention_mask.clone()
-        mask[:, 0] = 0  # exclude CLS position
-        lengths = attention_mask.sum(dim=1)
-        for i in range(len(lengths)):
-            eos_pos = lengths[i] - 1
-            if eos_pos > 0:
-                mask[i, eos_pos] = 0
-        mask_expanded = mask.unsqueeze(-1).float()
-        sum_hidden = (hidden * mask_expanded).sum(dim=1)
-        count = mask_expanded.sum(dim=1).clamp(min=1)
-        return sum_hidden / count
+
+        if self.emb_mode == "cls":
+            return hidden[:, 0, :]
+        else:
+            # Mean pooling excluding CLS (pos 0) and EOS
+            mask = attention_mask.clone()
+            mask[:, 0] = 0
+            lengths = attention_mask.sum(dim=1)
+            for i in range(len(lengths)):
+                eos_pos = lengths[i] - 1
+                if eos_pos > 0:
+                    mask[i, eos_pos] = 0
+            mask_expanded = mask.unsqueeze(-1).float()
+            sum_hidden = (hidden * mask_expanded).sum(dim=1)
+            count = mask_expanded.sum(dim=1).clamp(min=1)
+            return sum_hidden / count
 
     def get_gene_embedding(self, input_ids, attention_mask):
         """Per-token hidden states (B, S, D)."""

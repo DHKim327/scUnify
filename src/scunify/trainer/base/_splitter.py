@@ -1,23 +1,42 @@
-"""Train / Valid / (Test) splitter for LoRA training.
+"""Train / Valid / (Test) splitter for scUnify training.
 
-Reads user-defined split assignments from ``adata.obs`` columns.
+Reads user-defined split assignments from ``adata.obs`` columns. The split
+information must be provided by the caller — scUnify does not generate
+random / stratified / paper-recipe splits programmatically.
 
 Config structure (``training.split``)::
 
     split:
       fold_keys:                        # obs column(s) containing split labels
-        - "fold_0"                      #   each column: "train" | "valid" | "test"(optional)
+        - "fold_0"                      #   each column: "train" | "valid" | "test"
         - "fold_1"
         - "fold_2"
 
-Each fold column must contain "train" and "valid" labels.
-"test" is optional — if present, those cells are held out and embeddings
-are still extracted for the full dataset.
+Each fold column may contain any subset of {"train", "valid", "test"}; the
+only requirement is that "train" appears at least once. The four supported
+scenarios all map to obs label combinations:
+
+==================  =================  ==============================
+Scenario            obs label set      Behaviour
+==================  =================  ==============================
+train only          {"train"}          No validation, no test held out
+train + test        {"train", "test"}  test cells held out from training
+                                       (still appear in extracted h5ad)
+train + valid       {"train", "valid"} early-stopping, best-ckpt by
+                                       val_loss
+train + valid+test  {"train",          early-stopping + held-out test
+                    "valid", "test"}
+==================  =================  ==============================
 
 Single split (no cross-validation)::
 
     split:
       fold_keys: ["split"]             # single obs column
+
+K-fold cross-validation::
+
+    split:
+      fold_keys: ["fold_0", "fold_1", "fold_2"]
 """
 
 from __future__ import annotations
@@ -48,30 +67,29 @@ class DataSplitter:
     def n_folds(self) -> int:
         return len(self.fold_keys)
 
-    @property
-    def has_test(self) -> bool:
-        """Determined per-fold at split time (checks for 'test' label)."""
-        return False  # default; actual check in _split_by_column
-
     def split(self, adata):
         """Single split using the first fold_key.
 
-        Returns ``(train_adata, valid_adata, test_adata)``.
-        ``test_adata`` is empty if no "test" labels exist.
+        Returns ``(train_adata, valid_adata, test_adata)``. The valid/test
+        slices are empty (zero rows) when the corresponding labels are
+        absent from the obs column.
         """
         if not self.fold_keys:
             raise ValueError(
                 "split.fold_keys is required. "
-                "Set obs columns with 'train'/'valid' labels."
+                "Set obs columns with 'train'/'valid'/'test' labels."
             )
         return self._split_by_column(adata, self.fold_keys[0])
 
     def split_kfold(self, adata):
         """Multi-fold split using all fold_keys.
 
+        Each fold column produces its own ``(train, valid)`` partition.
+        The shared test set comes from the **first** fold column's "test"
+        labels — subsequent folds' "test" labels are ignored. If the first
+        fold has no "test" labels, the shared test set is empty.
+
         Returns ``(test_adata, [(train, valid), ...])``.
-        ``test_adata`` from the first fold is used as the shared test set.
-        If no "test" labels, ``test_adata`` is empty.
         """
         if not self.fold_keys:
             raise ValueError(

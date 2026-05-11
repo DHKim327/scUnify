@@ -29,6 +29,13 @@ class ScGPTDataset(Dataset):
         self.gene_ids = gene_ids
         self.n_cells = adata.n_obs
 
+        # Paper recipe — Integration (BC) uses ``include_zero_gene=True``;
+        # Annotation/Multiomics use False (only non-zero genes). Default False
+        # preserves the historical scunify behaviour for non-BC tasks.
+        self.include_zero_gene = bool(
+            config.preprocessing.get("include_zero_gene", False)
+        )
+
         # Requirements
         model_param = load_yaml(config._architecture_dir)
         self.cls = vocab["<cls>"]
@@ -55,9 +62,14 @@ class ScGPTDataset(Dataset):
             row = row.toarray().ravel()
         else:
             row = np.asarray(row).ravel()
-        nonzero_idx = np.nonzero(row)[0]
-        values = row[nonzero_idx]
-        genes = self.gene_ids[nonzero_idx]
+        if self.include_zero_gene:
+            # Paper recipe: keep all genes (including zero-expression ones).
+            values = row
+            genes = self.gene_ids
+        else:
+            nonzero_idx = np.nonzero(row)[0]
+            values = row[nonzero_idx]
+            genes = self.gene_ids[nonzero_idx]
         genes = np.insert(genes, 0, self.cls)
         values = np.insert(values, 0, self.pad_value)
         genes = torch.from_numpy(genes).long()

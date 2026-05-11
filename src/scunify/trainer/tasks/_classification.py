@@ -1,65 +1,62 @@
-"""ClassificationMixin — cell type/state classification via LoRA fine-tuning.
+"""ClassificationMixin v2 — backbone-agnostic.
 
-Applies to:
-- scGPT: Cell Type Identification (Ref: Tutorial_Annotation.ipynb)
-- Geneformer: Cell State Classification (Ref: Theodoris et al., Nature 2023)
-- Nicheformer: Niche Classification (Ref: Schaar et al., Nature Methods 2025)
+Works with any BaseTrainer that provides paper-faithful hooks:
+``default_head``, ``attach_task_head``, ``classifier_logits``.
+
+Architecture per backbone (paper-faithful):
+- scGPT          : ``ClsDecoder`` (3-layer Linear-ReLU-LN + Linear)         — Cui et al. 2024
+- scFoundation   : ``BatchNorm1d(affine=False) → Linear-ReLU-Linear``        — Hao et al. 2024
+- Nicheformer    : ``Linear(dim, n_cls, bias=False)``                       — Schaar et al. 2025
+- Geneformer     : ``BertForSequenceClassification.from_pretrained(...)``    — Theodoris et al. 2023
+- UCE            : ``Linear(emb, n_cls)``                                    — scunify default (UCE has no fine-tune)
 
 Usage::
 
-    training:
-      task: classification
-      task_param:
-        n_classes: 10
-        head_hidden: 128
-      label_keys: [celltype]
+    import scunify as scu
+
+    # Path A: yaml only — no Python file at all
+    # YAML: training.task_param.mixin: "ClassificationMixin"
+    #       training.label_keys: [celltype]
+    #       training.task_param.n_classes: 14
+
+    # Path B: subclass for declarative defaults
+    class MyCellTypeMixin(ClassificationMixin):
+        label_keys = ["celltype"]
+        n_classes = 14
+
+    scu.trainer.register_mixin("MyCellType", MyCellTypeMixin)
+
+5-line task definition. Same code works on all 5 backbones.
 """
+from __future__ import annotations
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from ._base import BaseMixin
+from ._base import TaskMixin
 
 
-class ClassificationMixin(BaseMixin):
-    """Cell-level classification: cell_embedding → Linear → CrossEntropyLoss."""
+class ClassificationMixin(TaskMixin):
+    """Cross-entropy classification on cell embeddings (or integrated classifier
+    output for HF-style backbones).
 
-    def build_model(self):
-        model = super().build_model()
+    Override ``label_keys`` / ``n_classes`` in subclass or via yaml. Override
+    ``compute_loss`` only for class weighting / label smoothing / multi-label.
+    """
 
-        task_cfg = self.training_cfg.get("task_param", {})
-        n_classes = int(task_cfg["n_classes"])
-        head_hidden = int(task_cfg.get("head_hidden", 128))
-        emb_dim = self._infer_emb_dim()
-
-        model.classifier_head = nn.Sequential(
-            nn.Linear(emb_dim, head_hidden),
-            nn.ReLU(),
-            nn.Dropout(0.1),
-            nn.Linear(head_hidden, n_classes),
-        )
-        return model
+    task_type = "classification"
+    label_keys: list[str] = []
+    n_classes: int = 0
 
     def compute_loss(self, model: nn.Module, batch: dict) -> torch.Tensor:
-        cell_emb = self.get_cell_embedding(model, batch)
-        m = self._unwrap(model)
-        logits = m.classifier_head(cell_emb)
-
-        label_keys = self.training_cfg.get("label_keys", [])
-        if not label_keys:
+        keys = self._label_keys
+        if not keys:
             raise ValueError(
-                "ClassificationMixin requires training.label_keys "
-                "to specify the target column name."
+                f"{type(self).__name__}.label_keys is empty. "
+                f"Set it as class attr (e.g. label_keys=['celltype']) or "
+                f"in yaml under training.label_keys."
             )
-        return F.cross_entropy(logits, batch[label_keys[0]].long())
-
-    def get_task_output(self, model: nn.Module, batch: dict) -> dict:
-        cell_emb = self.get_cell_embedding(model, batch)
-        m = self._unwrap(model)
-        logits = m.classifier_head(cell_emb)
-        preds = logits.argmax(dim=-1)
-        return {
-            "logits": {"data": logits, "storage": "obsm"},
-            "predictions": {"data": preds, "storage": "obs"},
-        }
+        logits = self.classifier_logits(model, batch)  # trainer-routed (paper-faithful)
+        target = batch[keys[0]].long()
+        return F.cross_entropy(logits, target)

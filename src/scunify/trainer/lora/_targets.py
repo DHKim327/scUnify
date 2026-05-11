@@ -17,25 +17,25 @@ from __future__ import annotations
 
 # Geneformer: native HF structure (BertForMaskedLM)
 _GENEFORMER_TARGETS = {
-    "query": ["query"],
-    "key": ["key"],
-    "value": ["value"],
-    "attn_out": ["attention.output.dense"],
-    "ffn": ["intermediate.dense", "output.dense"],
-    "ffn_up": ["intermediate.dense"],
-    "ffn_down": ["output.dense"],
+    "Q":   ["query"],
+    "K":   ["key"],
+    "V":   ["value"],
+    "O":   ["attention.output.dense"],
+    "FFN": ["intermediate.dense", "output.dense"],
+    "FFN_UP":   ["intermediate.dense"],
+    "FFN_DOWN": ["output.dense"],
 }
 
-# Unfused fused-QKV models: after UnfusedMultiheadAttention replacement
-# Applies to: Nicheformer, scFoundation, scGPT, UCE
+# Unfused fused-QKV models: after UnfusedMultiheadAttention replacement.
+# Applies to: Nicheformer, scFoundation, scGPT, UCE.
 _UNFUSED_TARGETS = {
-    "query": ["q_proj"],
-    "key": ["k_proj"],
-    "value": ["v_proj"],
-    "attn_out": ["out_proj"],
-    "ffn": ["linear1", "linear2"],
-    "ffn_up": ["linear1"],
-    "ffn_down": ["linear2"],
+    "Q":   ["q_proj"],
+    "K":   ["k_proj"],
+    "V":   ["v_proj"],
+    "O":   ["out_proj"],
+    "FFN": ["linear1", "linear2"],
+    "FFN_UP":   ["linear1"],
+    "FFN_DOWN": ["linear2"],
 }
 
 _PEFT_TARGET_MAP: dict[str, dict[str, list[str]]] = {
@@ -67,13 +67,12 @@ def resolve_peft_targets(model_name: str, targets: list[str]) -> list[str]:
 
     modules: list[str] = []
     for t in targets:
-        t_lower = t.lower()
-        if t_lower not in target_map:
+        if t not in target_map:
             raise ValueError(
                 f"Unknown target {t!r} for {model_name}. "
                 f"Available: {sorted(target_map.keys())}"
             )
-        modules.extend(target_map[t_lower])
+        modules.extend(target_map[t])
 
     # Deduplicate while preserving order
     seen: set[str] = set()

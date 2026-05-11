@@ -32,6 +32,13 @@ def load(config):
     model_param["ntoken"] = len(vocab)
     model_param["vocab_pad_token_idx"] = vocab[model_param["pad_token"]]
 
+    # Task-level overrides (e.g. INT sets do_dab, DSBN at Mixin.build_model)
+    model_cfg = config.get("model", {})
+    for key in ("do_dab", "do_mvc", "domain_spec_batchnorm", "explicit_zero_prob",
+                "use_batch_labels", "num_batch_labels", "ecs_threshold"):
+        if key in model_cfg:
+            model_param[key] = model_cfg[key]
+
     model = TransformerModel(**model_param)
     model = load_pretrained(model, torch.load(config.resources["model_file"], map_location="cpu"), verbose=False)
     return model

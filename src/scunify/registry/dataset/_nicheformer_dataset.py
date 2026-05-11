@@ -37,7 +37,7 @@ ASSAY_TOKENS = {
     # Ontology term IDs
     "EFO:0008992": 7,   # MERFISH
     "EFO:0030029": 8,   # CosMx / GeoMx
-    "EFO:0030080": 9,   # 10x (generic)
+    "EFO:0030080": 9,   # 10x (generic) / Xenium (paper assigns Xenium → 9)
     "EFO:0030003": 10,  # 10x 3'
     "EFO:0009899": 11,  # 10x 3'v2
     "EFO:0009922": 12,  # 10x 3'v3
@@ -46,7 +46,9 @@ ASSAY_TOKENS = {
     "EFO:0009900": 15,  # 10x 5'v2
     "EFO:0008931": 18,  # Smart-seq2
     # Shorthand aliases
-    "merfish": 7, "cosmx": 8, "10x": 9,
+    "merfish": 7, "MERFISH": 7,
+    "cosmx": 8, "CosMx": 8, "NanoString digital spatial profiling": 8,
+    "10x": 9, "xenium": 9, "Xenium": 9,
     "10x_3": 10, "10x_3v2": 11, "10x_3v3": 12,
     "10x_5": 13, "10x_5v1": 14, "10x_5v2": 15,
     "smart_seq2": 18,

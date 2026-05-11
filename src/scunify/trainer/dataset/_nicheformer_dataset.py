@@ -43,8 +43,15 @@ class NicheformerTrainingDataset(NicheformerDataset):
         training_cfg = config.get("training", {})
         mlm_cfg = training_cfg.get("mlm", {})
 
-        # Label passthrough from adata.obs
-        self._label_arrays = {}
+        # Label passthrough — auto-route obs (scalar/categorical) vs
+        # obsm (vector). Tasks like RegressionMixin can target both:
+        #   density (obs scalar) → batch[key] is (B,) float
+        #   X_niche_N (obsm sparse vector) → batch[key] is (B, D) float
+        import numpy as np
+        from scipy.sparse import issparse
+
+        self._label_arrays: dict[str, "np.ndarray | sparse.spmatrix"] = {}
+        self._label_sources: dict[str, str] = {}   # "obs" | "obsm"
         for key in training_cfg.get("label_keys", []):
             if key in adata.obs.columns:
                 col = adata.obs[key]
@@ -52,6 +59,18 @@ class NicheformerTrainingDataset(NicheformerDataset):
                     col.cat.codes.values.copy()
                     if hasattr(col, "cat")
                     else col.values.copy()
+                )
+                self._label_sources[key] = "obs"
+            elif key in adata.obsm.keys():
+                x = adata.obsm[key]
+                # keep sparse for memory; densify per-cell in __getitem__
+                self._label_arrays[key] = x if issparse(x) else np.asarray(x)
+                self._label_sources[key] = "obsm"
+            else:
+                raise KeyError(
+                    f"label_key {key!r} not found in adata.obs or adata.obsm. "
+                    f"obs cols: {list(adata.obs.columns)[:10]}..., "
+                    f"obsm keys: {list(adata.obsm.keys())}"
                 )
         self.mask_ratio = float(mlm_cfg.get("mask_prob", 0.15))
         self.mask_token_prob = float(mlm_cfg.get("mask_token_prob", 0.8))
@@ -108,7 +127,20 @@ class NicheformerTrainingDataset(NicheformerDataset):
             "cid": base["cid"],
         }
         for key, arr in self._label_arrays.items():
-            result[key] = torch.tensor(arr[idx], dtype=torch.long)
+            if self._label_sources[key] == "obs":
+                # Categorical → long, numerical → preserve dtype (cast in mixin)
+                v = arr[idx]
+                if hasattr(v, "dtype") and getattr(v.dtype, "kind", None) in ("i", "u", "b"):
+                    result[key] = torch.tensor(v, dtype=torch.long)
+                else:
+                    result[key] = torch.tensor(float(v), dtype=torch.float32)
+            else:  # obsm — vector
+                row = arr[idx]
+                if hasattr(row, "toarray"):       # sparse row
+                    row = row.toarray().ravel()
+                else:
+                    row = row.ravel() if hasattr(row, "ravel") else row
+                result[key] = torch.tensor(row, dtype=torch.float32)
         return result
 
     def collator(self, batch):

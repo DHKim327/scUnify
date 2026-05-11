@@ -105,6 +105,22 @@ class TrainingProgressActor:
             r["status"] = "DONE"
             r["ts"] = time.time()
 
+    def fail(self, task_name: str, rank: int, error: str | None = None):
+        """Mark task as FAILED. Terminal state for run_until_complete()."""
+        r = self.rows.get((task_name, rank))
+        if r is None:
+            self.rows[(task_name, rank)] = dict(
+                task=task_name, rank=rank, gpu="-", batch_size="-",
+                done=0, total=0, epoch=0, total_epochs=0,
+                loss=None, val_loss=None, fold=None,
+                status="FAILED", ts=time.time(),
+            )
+            r = self.rows[(task_name, rank)]
+        r["status"] = "FAILED"
+        r["ts"] = time.time()
+        if error:
+            r["error"] = error[:200]
+
     def snapshot(self):
         return self.rows.copy()
 
@@ -183,7 +199,8 @@ class TrainingProgressUI:
                 rows = ray.get(self.actor.snapshot.remote())
                 live.update(self._render_table(rows))
                 if rows and all(
-                    r.get("status") == "DONE" for r in rows.values()
+                    r.get("status") in ("DONE", "FAILED")
+                    for r in rows.values()
                 ):
                     break
                 time.sleep(self.poll_interval)

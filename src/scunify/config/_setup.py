@@ -13,17 +13,18 @@ _ENV_DIR = Path(__file__).resolve().parent / "envs"
 
 
 def setup(
-    resource_dir: str, 
-    config_dir: str, 
+    resource_dir: str,
+    config_dir: str,
     auto_download: bool = False,
     create_conda_envs: bool = False,
+    perturb: bool = False,
 ):
     """
     Setup configuration files for scUnify models
-    
+
     This function validates model resources, creates configuration files,
     and optionally creates conda environments for each model.
-    
+
     Args:
         resource_dir: Directory containing model weights and resources
         config_dir: Directory to save generated configuration files
@@ -31,16 +32,25 @@ def setup(
         create_conda_envs: If True, create system conda environments (default: False)
                            This will create: scunify_scgpt, scunify_scfoundation, scunify_uce
                            Takes about 45 minutes on first run.
-    
+        perturb: If True, additionally create the ``scunify_perturb`` conda env
+                 used by perturbation tasks (torch_geometric + GEARS deps shared
+                 across scGPT and scFoundation perturbation mixins). Independent
+                 of ``create_conda_envs`` — pass ``perturb=True`` even if model
+                 envs are already created.
+
     Examples:
         >>> # Basic setup (validation only)
         >>> setup("./resources", "./configs")
-        
+
         >>> # Setup with auto-download
         >>> setup("./resources", "./configs", auto_download=True)
-        
+
         >>> # Setup + pre-cache Ray environments (recommended!)
-    
+        >>> setup("./resources", "./configs", create_conda_envs=True)
+
+        >>> # Add the perturbation env on top of existing model envs
+        >>> setup("./resources", "./configs", perturb=True)
+
     Raises:
         NotADirectoryError: If resource_dir is not a valid directory
     """
@@ -110,6 +120,9 @@ def setup(
     if create_conda_envs and configured_models:
         _create_system_conda_envs(configured_models)
 
+    if perturb:
+        _create_perturb_conda_env()
+
     # ========== Final summary ==========
     print(f"\n{'='*60}")
     print(f"✅ Setup Completed!")
@@ -131,8 +144,73 @@ def setup(
         print(f"\n💡 To create conda environments for faster startup:")
         print(f"   >>> from scunify.config import setup")
         print(f"   >>> setup('{resource_dir}', '{config_dir}', create_conda_envs=True)")
-    
+
+    if perturb:
+        print(f"\n💡 GEARS perturbation deps added to existing model envs")
+        print(f"   Default mapping continues to work (model_name → scunify_<model>);")
+        print(f"   no yaml ``env:`` override needed for perturbation tasks.")
+
     print()
+
+
+# Lightweight extras pinned for ABI safety. ``--no-deps`` on torch_geometric
+# is critical: PyPI's torch_geometric (no torch version pin) otherwise pulls
+# the latest torch and breaks the conda-installed torch ABI.
+_PERTURB_GEARS_PKGS = ["dcor", "networkx>=2.8", "omegaconf"]
+_PERTURB_PYG_PKG = "torch_geometric==2.5.0"
+_PERTURB_BACKBONES = ("scgpt", "scfoundation")
+
+
+def _create_perturb_conda_env():
+    """Add GEARS perturbation deps (torch_geometric + dcor + networkx) to
+    each existing model env (``scunify_scgpt``, ``scunify_scfoundation``).
+
+    Why add to existing envs instead of creating dedicated perturb envs:
+    scGPT (torch 2.3 + torchtext 0.18) and scFoundation (torch 2.11 + cu128 +
+    local-attention) have mutually incompatible ABIs — a single shared env is
+    impossible. The cheapest path is to layer the small GEARS deps onto each
+    paper-faithful backbone env. No yaml ``env:`` override is needed.
+
+    ``torch_geometric`` is installed with ``--no-deps`` so its unpinned ``torch``
+    requirement does not silently upgrade the conda-installed torch.
+    """
+    print(f"\n{'='*60}")
+    print(f"🔧 Adding GEARS perturbation deps to model envs")
+    print(f"{'='*60}")
+
+    for backbone in _PERTURB_BACKBONES:
+        env_name = f"scunify_{backbone}"
+
+        # Skip if env doesn't exist (model not configured for this user)
+        try:
+            result = subprocess.run(
+                ["conda", "env", "list"],
+                capture_output=True, text=True, check=False,
+            )
+            if env_name not in result.stdout:
+                print(f"⚠️  {env_name} not found — skip. Run setup(create_conda_envs=True) first.")
+                continue
+        except Exception as e:
+            print(f"⚠️  Could not check env list: {e}")
+            continue
+
+        print(f"\n📦 [{env_name}] installing GEARS deps...")
+        try:
+            # 1) torch_geometric WITH --no-deps so it cannot upgrade torch.
+            subprocess.run([
+                "conda", "run", "-n", env_name,
+                "pip", "install", "--no-deps", _PERTURB_PYG_PKG,
+            ], check=True)
+            # 2) Pure-python helpers (torch-agnostic).
+            subprocess.run([
+                "conda", "run", "-n", env_name,
+                "pip", "install", *_PERTURB_GEARS_PKGS,
+            ], check=True)
+            print(f"    ✅ {env_name} ready for perturbation tasks")
+        except subprocess.CalledProcessError as e:
+            print(f"    ❌ failed: {e}")
+        except Exception as e:
+            print(f"    ❌ unexpected: {e}")
 
 
 def _create_system_conda_envs(models: list[str]):

@@ -11,6 +11,5 @@ class ScFoundationInferencer(BaseInferencer):
         return ScFoundationInferenceWrapper(self.cfg)
 
     def forward_step(self, model, batch):
-        values, pad, pos, cid = batch
-        emb = model(values, pad, pos)
-        return emb, cid
+        emb = model(batch["pretrain_gene_x"])
+        return emb, batch["cid"]

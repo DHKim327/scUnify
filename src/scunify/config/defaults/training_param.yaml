@@ -2,9 +2,10 @@
 # All models share these defaults; model-specific overrides go in models/*.yaml
 
 training:
-  mode: "lora"
+  mode: "lora"                        # full | probe | lora
   epochs: 50
   gradient_accumulation_steps: 1
+  gradient_clip: null                 # max grad norm (null to disable, 1.0 recommended)
 
   # --- Task configuration ---
   task: "pretraining"                 # pretraining | classification | perturbation | regression | integration
@@ -12,31 +13,56 @@ training:
     mixin: null                       # built-in or user-registered Mixin name (overrides task default)
   label_keys: []                      # adata.obs columns to pass through to batch
 
-  lora:
-    adapter_type: "lora"              # lora | dora | rslora | adalora | loha | lokr | ia3 | oft
-    rank: 8
-    alpha: 8                          # scaling = alpha/rank
-    dropout: 0.0
-    targets:
-      - query
-      - value
-    layer_strategy: "first"           # "first" | "last" | "all"
-    layer_ratio: 0.5                  # 50% of total layers
-    # adapter-specific params added here are passed through to PEFT config
+  # --- Layer-selective freeze (applies to ``full`` and ``lora`` modes) ---
+  # full   : freeze backbone, then unfreeze the selected layers (head always trainable)
+  # lora   : inject the adapter only on the selected layers (head always trainable)
+  # probe  : (mode-level) freeze entire backbone, head only — independent of this block
+  # ``layer_strategy: none`` under ``mode: full`` is equivalent to ``mode: probe``.
+  freeze:
+    layer_strategy: all              # first | last | all | none | indices
+    layer_ratio: 0.5                 # int (count) or float (fraction)
+    # layer_indices: [10, 11]        # explicit; overrides strategy/ratio
 
+  # --- LoRA / PEFT (HF passthrough) ---
+  # Used only when mode=lora. Selects the adapter family via ``type``
+  # (or legacy ``adapter_type``). Every other key is forwarded directly
+  # to the corresponding peft config class — so any HF-PEFT supported
+  # kwarg (use_rslora, use_dora, init_lora_weights, modules_to_save, …)
+  # is available without code changes.
+  lora:
+    type: LoraConfig                 # LoraConfig | AdaLoraConfig | LoHaConfig | LoKrConfig | IA3Config | OFTConfig
+    r: 8
+    lora_alpha: 8                    # scaling = alpha/rank
+    lora_dropout: 0.0
+    target_modules: [Q, V]           # canonical: Q | K | V | O | FFN | FFN_UP | FFN_DOWN
+
+  # --- Optimizer (PyTorch passthrough) ---
+  # ``type`` selects ``torch.optim.<type>``; every other key is forwarded
+  # to the constructor (lr, betas, weight_decay, eps, foreach, fused, …).
   optimizer:
-    type: "adam"                       # adam (not adamw); scPEFT default
+    type: Adam
     lr: 1.0e-5
     betas: [0.9, 0.999]
     weight_decay: 0.0
 
+  # --- Scheduler (PyTorch passthrough) ---
+  # ``type`` selects ``torch.optim.lr_scheduler.<type>``. ``warmup_ratio``
+  # / ``warmup_steps`` are scunify extensions that wrap with a linear
+  # warmup. ``step_unit: epoch`` (StepLR only) converts step_size from
+  # epoch-units to optimizer-step units (paper convention).
   scheduler:
-    type: "cosine"
-    warmup_ratio: 0.9                 # 90% warmup → 10% cosine decay
+    type: CosineAnnealingLR
+    warmup_ratio: 0.9                # 90% warmup → 10% cosine decay
+
+  # --- Monitor (best-ckpt + early-stop shared metric/direction) ---
+  # Block read by training_loop's _resolve_monitor; per-task yaml overrides
+  # this default. e.g. scGPT perturbation = val_pearson/max, GEARS = val_mse_de/min.
+  monitor:
+    metric: val_loss               # key from compute_val_metrics return dict
+    direction: min                 # min | max
 
   early_stopping:
     patience: 5
-    monitor: "val_loss"
     min_delta: 0.0
 
   split:
@@ -47,5 +73,14 @@ training:
 save:
   checkpoint: true                    # LoRA adapter weights (adapter_model.safetensors)
   merged_model: true                  # merge LoRA into base model and save
-  output_keys:                        # what to extract and save after training
-    - cell_embedding                  # get_cell_embedding → obsm["X_cell_embedding"]
+  outputs:                            # what to extract from the trained model
+    - cell_embedding                  # forward_embed_step → obsm["X_cell_embedding"]
+    # other supported keys:
+    #   - gene_embedding              # forward_gene_embed_step → obsm["X_gene_embedding"]
+    #   - <any predict() key>         # logits / predictions / custom (mixin-defined)
+  epochs:                             # when to extract; "final" = end of training,
+                                      # ints = end of that epoch (mid-training snapshot)
+    - final
+    # Example BC trajectory:
+    # epochs: [1, 10, 20, 30, 40, 50, final]
+    # → obsm["X_cell_embedding_ep1"], "X_cell_embedding_ep10", …, "X_cell_embedding"

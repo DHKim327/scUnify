@@ -81,14 +81,22 @@ class ScGPTTrainingWrapper(ScGPTWrapper):
     # ------------------------------------------------------------------ #
     #  Embedding access (gradient flow preserved for downstream tasks)
     # ------------------------------------------------------------------ #
-    def get_cell_embedding(self, gene, masked_expr, src_key_padding_mask):
-        """CLS token embedding (B, D). Ref: scGPT Tutorial_Annotation."""
-        hidden = self.model._encode(gene, masked_expr, src_key_padding_mask)
+    def get_cell_embedding(self, gene, masked_expr, src_key_padding_mask, batch_labels=None):
+        """CLS token embedding (B, D). Ref: scGPT Tutorial_Annotation.
+
+        Pass ``batch_labels`` when DSBN is enabled so the encoder picks the
+        correct per-batch BatchNorm statistics.
+        """
+        hidden = self.model._encode(
+            gene, masked_expr, src_key_padding_mask, batch_labels=batch_labels
+        )
         return hidden[:, 0, :]  # CLS token
 
-    def get_gene_embedding(self, gene, masked_expr, src_key_padding_mask):
+    def get_gene_embedding(self, gene, masked_expr, src_key_padding_mask, batch_labels=None):
         """Per-gene hidden states (B, S, D)."""
-        return self.model._encode(gene, masked_expr, src_key_padding_mask)
+        return self.model._encode(
+            gene, masked_expr, src_key_padding_mask, batch_labels=batch_labels
+        )
 
     # ------------------------------------------------------------------ #
     #  Embedding extraction (post-training, same as inference wrapper)
